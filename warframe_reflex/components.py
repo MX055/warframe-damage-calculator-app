@@ -150,6 +150,18 @@ def header() -> rx.Component:
     )
 
 
+def mobile_quick_nav() -> rx.Component:
+    """Compact section navigation shown only on phone-sized screens."""
+    return rx.hstack(
+        rx.link("Weapon", href="#weapon", class_name="mobile-nav-link"),
+        rx.link("Upgrades", href="#upgrades", class_name="mobile-nav-link"),
+        rx.link("Results", href="#results", class_name="mobile-nav-link"),
+        width="100%",
+        class_name="mobile-quick-nav",
+        aria_label="Calculator sections",
+    )
+
+
 def read_me() -> rx.Component:
     return rx.accordion.root(
         rx.accordion.item(
@@ -634,6 +646,8 @@ def weapon_section() -> rx.Component:
         ),
         width="100%",
         gap="3",
+        id="weapon",
+        class_name="page-section",
     )
 
 
@@ -911,6 +925,8 @@ def upgrades_section() -> rx.Component:
         ),
         width="100%",
         gap="4",
+        id="upgrades",
+        class_name="page-section",
     )
 
 
@@ -1090,6 +1106,8 @@ def results_section() -> rx.Component:
         ),
         width="100%",
         gap="3",
+        id="results",
+        class_name="page-section",
     )
 
 
@@ -1097,6 +1115,7 @@ def page() -> rx.Component:
     return rx.box(
         rx.vstack(
             header(),
+            mobile_quick_nav(),
             read_me(),
             weapon_section(),
             upgrades_section(),

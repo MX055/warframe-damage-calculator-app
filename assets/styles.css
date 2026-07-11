@@ -14,6 +14,9 @@ body {
   background:
     radial-gradient(circle at top right, rgba(255, 90, 50, 0.08), transparent 32rem),
     var(--app-bg);
+  min-width: 0;
+  overflow-x: hidden;
+  scroll-behavior: smooth;
 }
 
 * {
@@ -29,6 +32,14 @@ body {
 
 .app-header {
   padding: 0.25rem 0;
+}
+
+.mobile-quick-nav {
+  display: none;
+}
+
+.page-section {
+  scroll-margin-top: 5rem;
 }
 
 .header-subtitle,
@@ -211,9 +222,138 @@ body {
 
 @media (max-width: 620px) {
   .page-shell {
-    padding-inline: 0.7rem;
+    padding: 0.75rem 0.65rem 2.5rem;
   }
 
+  .page-shell > div { gap: 1.35rem !important; }
+
+  .app-header {
+    align-items: flex-start !important;
+    gap: 0.5rem;
+  }
+
+  .app-header h1 {
+    font-size: 1.55rem !important;
+    line-height: 1.15 !important;
+  }
+
+  .header-subtitle {
+    font-size: 0.82rem;
+    line-height: 1.4;
+  }
+
+  .app-header > span:last-child { display: none; }
+
+  .mobile-quick-nav {
+    position: sticky;
+    top: 0.5rem;
+    z-index: 20;
+    display: grid !important;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 4px !important;
+    padding: 4px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: rgba(18, 21, 25, 0.94);
+    box-shadow: 0 8px 30px rgba(0, 0, 0, 0.35);
+    backdrop-filter: blur(14px);
+  }
+
+  .mobile-nav-link {
+    min-height: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 8px;
+    color: var(--text-muted);
+    font-size: 0.8rem;
+    font-weight: 700;
+    text-decoration: none;
+  }
+
+  .mobile-nav-link:active,
+  .mobile-nav-link:focus-visible {
+    color: white;
+    background: rgba(255, 122, 89, 0.14);
+  }
+
+  .panel, .slot-card, .metric-card { border-radius: 12px; }
+  .panel { padding: 0.8rem; }
+
+  .slot-grid {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: none;
+    gap: 10px;
+  }
+
+  .metric-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-rows: none;
+    gap: 8px;
+  }
+
+  .metric-card { padding: 0.75rem; }
+
+  .metric-value {
+    font-size: 1.05rem;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .form-grid-2, .form-grid-4, .form-grid-5,
+  .damage-editor-grid {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  [role="tablist"] {
+    max-width: 100%;
+    overflow-x: auto;
+    overflow-y: hidden;
+    justify-content: flex-start;
+    scrollbar-width: none;
+  }
+
+  [role="tablist"]::-webkit-scrollbar { display: none; }
+
+  [role="tab"] {
+    min-height: 42px;
+    flex: 0 0 auto;
+    white-space: nowrap;
+  }
+
+  input, button, [data-radix-select-trigger] { font-size: 16px !important; }
+
+  input, [data-radix-select-trigger],
+  .full-width-select-trigger, [data-full-width-select="true"] {
+    min-height: 42px !important;
+    height: 42px !important;
+  }
+
+  .icon-button {
+    width: 42px !important;
+    min-width: 42px !important;
+    height: 42px !important;
+    min-height: 42px !important;
+  }
+
+  .toggle-control { min-height: 48px; }
+  table { min-width: 620px; }
+
+  pre {
+    max-width: calc(100vw - 2.6rem);
+    overflow-x: auto;
+  }
+
+  .contribution-row { gap: 0.75rem; }
+  .contribution-row > :first-child {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+}
+
+@media (max-width: 380px) {
+  .metric-grid { grid-template-columns: minmax(0, 1fr); }
 }
 
 /* Explicit spacing for upgrade-card controls. Reflex theme spacing can be
@@ -297,3 +437,12 @@ body {
   align-items: center !important;
 }
 
+/* This rule must follow the desktop select sizing above so phone controls keep
+   a comfortable touch target. */
+@media (max-width: 620px) {
+  .full-width-select-trigger,
+  [data-full-width-select="true"] {
+    height: 42px !important;
+    min-height: 42px !important;
+  }
+}
