@@ -1,7 +1,7 @@
 import reflex as rx
 
 config = rx.Config(
-    app_name="warframe_damage_calculator_app",
+    app_name="warframe_reflex",
     plugins=[
         rx.plugins.RadixThemesPlugin(
             theme=rx.theme(
