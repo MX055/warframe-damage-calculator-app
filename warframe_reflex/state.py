@@ -15,16 +15,15 @@ from .constants import (
     MOD_FIELD,
     NO_EFFECT,
     SLOT_CONFIGS,
+    WEAPON_CATEGORY_TYPES,
     UPGRADE_BOOL_FIELDS,
     UPGRADE_SCALAR_FIELDS,
-    WEAPON_TYPES,
 )
 from .data import (
     database_conditional_info,
     database_max_stacks,
     database_rank_bounds,
     database_upgrade,
-    selected_weapon_is_bow,
     upgrade_names_for_ui,
     weapon_names_for_type,
 )
@@ -106,6 +105,7 @@ class CalculatorState(rx.State):
 
     initialized: bool = False
     selected_weapon_type: str = "Primary"
+    selected_weapon_category: str = "Rifle"
     selected_weapon: str = CUSTOM
 
     weapon_options: list[str] = rx.field(default_factory=lambda: [CUSTOM])
@@ -120,7 +120,6 @@ class CalculatorState(rx.State):
     is_charge_weapon: bool = False
     is_burst_weapon: bool = False
     is_beam: bool = False
-    custom_is_bow: bool = False
 
     base_crit_chance: float = 0.0
     base_crit_damage: float = 1.0
@@ -209,10 +208,6 @@ class CalculatorState(rx.State):
         return self.selected_weapon_type == "Melee"
 
     @rx.var
-    def primary_weapon(self) -> bool:
-        return self.selected_weapon_type == "Primary"
-
-    @rx.var
     def has_error(self) -> bool:
         return bool(self.result_error)
 
@@ -229,13 +224,12 @@ class CalculatorState(rx.State):
 
     @rx.event
     def set_weapon_type(self, value: str):
-        if value not in WEAPON_TYPES:
+        if value not in WEAPON_CATEGORY_TYPES:
             return
-        self.selected_weapon_type = value
+        self.selected_weapon_category = value
+        self.selected_weapon_type = WEAPON_CATEGORY_TYPES[value]
         self.selected_weapon = CUSTOM
-        if value != "Primary":
-            self.custom_is_bow = False
-        if value == "Melee":
+        if self.selected_weapon_type == "Melee":
             self.is_battery = False
             self.is_charge_weapon = False
             self.is_burst_weapon = False
@@ -276,7 +270,6 @@ class CalculatorState(rx.State):
             "is_charge_weapon",
             "is_burst_weapon",
             "is_beam",
-            "custom_is_bow",
         }:
             return
         setattr(self, field_name, bool(value))
@@ -506,7 +499,13 @@ class CalculatorState(rx.State):
         self._recalculate()
 
     def _refresh_weapon_options(self):
-        self.weapon_options = [CUSTOM, *weapon_names_for_type(self.selected_weapon_type)]
+        self.weapon_options = [
+            CUSTOM,
+            *weapon_names_for_type(
+                self.selected_weapon_type,
+                self.selected_weapon_category,
+            ),
+        ]
         if self.selected_weapon not in self.weapon_options:
             self.selected_weapon = CUSTOM
 
@@ -515,7 +514,7 @@ class CalculatorState(rx.State):
         self.mod_options = [
             CUSTOM,
             *upgrade_names_for_ui(
-                self.selected_weapon_type,
+                self.selected_weapon_category,
                 weapon_name,
                 True,
                 False,
@@ -525,7 +524,7 @@ class CalculatorState(rx.State):
         self.exilus_options = [
             CUSTOM,
             *upgrade_names_for_ui(
-                self.selected_weapon_type,
+                self.selected_weapon_category,
                 weapon_name,
                 True,
                 False,
@@ -535,7 +534,7 @@ class CalculatorState(rx.State):
         self.arcane_options = [
             CUSTOM,
             *upgrade_names_for_ui(
-                self.selected_weapon_type,
+                self.selected_weapon_category,
                 weapon_name,
                 False,
                 True,
@@ -707,11 +706,7 @@ class CalculatorState(rx.State):
                 "attack_speed": self.base_attack_speed,
             }
 
-        weapon_subtype = (
-            "bow"
-            if self.selected_weapon_type == "Primary" and self.custom_is_bow
-            else self.selected_weapon_type.casefold()
-        )
+        weapon_subtype = self.selected_weapon_category.casefold()
         return {
             "type": weapon_subtype,
             "damage_dist": self._damage_dist(self.direct_damage_fields),
@@ -744,12 +739,7 @@ class CalculatorState(rx.State):
         return build_upgrade(name, {field.name: field.value for field in fields})
 
     def _is_bow(self) -> bool:
-        return selected_weapon_is_bow(
-            self.selected_weapon_type,
-            None if self.custom_weapon else self.selected_weapon,
-            custom_weapon=self.custom_weapon,
-            custom_is_bow=self.custom_is_bow,
-        )
+        return self.selected_weapon_category == "Bow"
 
     def _slot_upgrade(self, index: int) -> Upgrade:
         config = SLOT_CONFIGS[index]

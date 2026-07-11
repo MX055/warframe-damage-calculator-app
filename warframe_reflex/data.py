@@ -10,6 +10,7 @@ from pathlib import Path
 from warframe_damage_calculator import Upgrade, arsenal
 
 from .constants import (
+    WEAPON_CATEGORY_TYPES,
     WEAPON_COMPATIBILITY_FAMILIES,
     WEAPON_DATABASE_SECTIONS,
     WEAPON_TYPES,
@@ -161,10 +162,11 @@ def database_conditional_info(
 
 
 def weapon_compatibility_terms(
-    weapon_type_name: str,
+    weapon_category: str,
     selected_weapon_name: str | None = None,
 ) -> set[str]:
-    terms = set(WEAPON_COMPATIBILITY_FAMILIES[weapon_type_name])
+    terms = set(WEAPON_COMPATIBILITY_FAMILIES[weapon_category])
+    weapon_type_name = WEAPON_CATEGORY_TYPES[weapon_category]
     if selected_weapon_name and selected_weapon_name != "custom":
         metadata = raw_weapon_metadata(weapon_type_name, selected_weapon_name)
         terms.add(normalized_database_key(selected_weapon_name))
@@ -176,20 +178,22 @@ def weapon_compatibility_terms(
 
 def upgrade_matches_weapon_type(
     metadata: dict,
-    weapon_type_name: str,
+    weapon_category: str,
     *,
     selected_weapon_name: str | None = None,
 ) -> bool:
+    raw_compatibility = metadata.get("compatibility", [])
+    if isinstance(raw_compatibility, str):
+        raw_compatibility = [raw_compatibility]
     compatibility = {
-        normalized_database_key(item)
-        for item in metadata.get("compatibility", [])
+        normalized_database_key(item) for item in raw_compatibility
     }
     if not compatibility:
         return False
 
     if not (
         compatibility
-        & weapon_compatibility_terms(weapon_type_name, selected_weapon_name)
+        & weapon_compatibility_terms(weapon_category, selected_weapon_name)
     ):
         return False
 
@@ -197,6 +201,7 @@ def upgrade_matches_weapon_type(
     if not requirements or not selected_weapon_name or selected_weapon_name == "custom":
         return True
 
+    weapon_type_name = WEAPON_CATEGORY_TYPES[weapon_category]
     weapon_metadata = raw_weapon_metadata(weapon_type_name, selected_weapon_name)
     for key, expected in requirements.items():
         actual = weapon_metadata.get(key)
@@ -215,11 +220,26 @@ def database_items(type_filter: str | None = None) -> dict:
 
 
 @lru_cache(maxsize=None)
-def weapon_names_for_type(weapon_type_name: str) -> tuple[str, ...]:
+def weapon_names_for_type(
+    weapon_type_name: str,
+    weapon_category: str | None = None,
+) -> tuple[str, ...]:
     section = WEAPON_DATABASE_SECTIONS[weapon_type_name]
     names = raw_weapons_database().get(section, {})
     if names:
-        return tuple(sorted(names, key=str.casefold))
+        return tuple(
+            sorted(
+                (
+                    name
+                    for name, metadata in names.items()
+                    if weapon_category is None
+                    or weapon_category == "Melee"
+                    or normalized_database_key(metadata.get("type"))
+                    == normalized_database_key(weapon_category)
+                ),
+                key=str.casefold,
+            )
+        )
 
     weapon_class = WEAPON_TYPES[weapon_type_name]
     return tuple(
@@ -238,14 +258,19 @@ def weapon_names_for_type(weapon_type_name: str) -> tuple[str, ...]:
 
 @lru_cache(maxsize=None)
 def upgrade_names_for_ui(
-    weapon_type_name: str,
+    weapon_category: str,
     selected_weapon_name: str | None,
     include_mods: bool,
     include_arcanes: bool,
     exilus_only: bool,
 ) -> tuple[str, ...]:
     upgrades = raw_upgrades_database()
+    weapon_type_name = WEAPON_CATEGORY_TYPES[weapon_category]
     names: list[str] = []
+    database_has_requested_items = bool(
+        (include_mods and "mods" in upgrades)
+        or (include_arcanes and "arcanes" in upgrades)
+    )
 
     if include_mods:
         for name, metadata in upgrades.get("mods", {}).items():
@@ -254,7 +279,7 @@ def upgrade_names_for_ui(
                 continue
             if upgrade_matches_weapon_type(
                 metadata,
-                weapon_type_name,
+                weapon_category,
                 selected_weapon_name=selected_weapon_name,
             ):
                 names.append(name)
@@ -263,12 +288,12 @@ def upgrade_names_for_ui(
         for name, metadata in upgrades.get("arcanes", {}).items():
             if upgrade_matches_weapon_type(
                 metadata,
-                weapon_type_name,
+                weapon_category,
                 selected_weapon_name=selected_weapon_name,
             ):
                 names.append(name)
 
-    if names:
+    if database_has_requested_items:
         return tuple(sorted(names, key=str.casefold))
 
     type_filter = type_query_for_weapon_type(weapon_type_name)
@@ -445,18 +470,3 @@ def database_max_stacks(
     except (TypeError, ValueError):
         return None
     return max_stacks if max_stacks > 0 else None
-
-
-def selected_weapon_is_bow(
-    weapon_type_name: str,
-    selected_weapon_name: str | None,
-    *,
-    custom_weapon: bool,
-    custom_is_bow: bool,
-) -> bool:
-    if weapon_type_name != "Primary":
-        return False
-    if custom_weapon:
-        return custom_is_bow
-    metadata = raw_weapon_metadata(weapon_type_name, selected_weapon_name)
-    return normalized_database_key(metadata.get("type")) == "bow"

@@ -8,7 +8,16 @@ WEAPON_TYPES = {
     "Secondary": Secondary,
 }
 
-WEAPON_TYPE_OPTIONS = list(WEAPON_TYPES)
+WEAPON_CATEGORY_TYPES = {
+    "Rifle": "Primary",
+    "Shotgun": "Primary",
+    "Bow": "Primary",
+    "Sniper": "Primary",
+    "Pistol": "Secondary",
+    "Melee": "Melee",
+}
+
+WEAPON_TYPE_OPTIONS = list(WEAPON_CATEGORY_TYPES)
 
 DAMAGE_TYPES = (
     "impact",
@@ -47,9 +56,8 @@ WEAPON_DATABASE_SECTIONS = {
 }
 
 WEAPON_COMPATIBILITY_FAMILIES = {
-    "Primary": {"primary", "bow", "rifle", "shotgun", "sniper"},
-    "Secondary": {"secondary", "pistol"},
-    "Melee": {"melee"},
+    category: {weapon_type.casefold(), category.casefold()}
+    for category, weapon_type in WEAPON_CATEGORY_TYPES.items()
 }
 
 MOD_FIELD: dict[str, tuple[float | int, ...] | None] = {

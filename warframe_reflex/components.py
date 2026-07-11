@@ -311,7 +311,7 @@ def progenitor_controls() -> rx.Component:
         columns=rx.breakpoints(initial="1", sm="2"),
         gap="4",
         width="100%",
-        class_name="form-grid form-grid-2",
+        class_name="form-grid form-grid-2 progenitor-grid",
     )
 
 
@@ -419,18 +419,10 @@ def custom_base_stats() -> rx.Component:
             CalculatorState.is_beam,
             lambda value: CalculatorState.set_base_toggle("is_beam", value),
         ),
-        rx.cond(
-            CalculatorState.primary_weapon,
-            toggle_control(
-                "Bow",
-                CalculatorState.custom_is_bow,
-                lambda value: CalculatorState.set_base_toggle("custom_is_bow", value),
-            ),
-        ),
-        columns=rx.breakpoints(initial="1", sm="2", lg="5"),
+        columns=rx.breakpoints(initial="1", sm="2", lg="4"),
         gap="3",
         width="100%",
-        class_name="form-grid form-grid-5",
+        class_name="form-grid form-grid-4",
     )
 
     ranged_core = rx.vstack(
@@ -619,9 +611,9 @@ def weapon_section() -> rx.Component:
             rx.vstack(
                 rx.grid(
                     select_control(
-                        "Weapon Type",
+                        "Weapon Category",
                         WEAPON_TYPE_OPTIONS,
-                        CalculatorState.selected_weapon_type,
+                        CalculatorState.selected_weapon_category,
                         CalculatorState.set_weapon_type,
                     ),
                     select_control(
