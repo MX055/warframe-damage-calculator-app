@@ -26,7 +26,8 @@ uv run reflex run
 ### With `pip`
 
 ```bash
-py -m pip install -r requirements.txt
+py -m pip install "reflex>=0.9.6.post1,<0.10"
+py -m pip install "warframe-damage-calculator @ git+https://github.com/AAAA0001/warframe-damage-calculator.git@main"
 reflex run
 ```
 
@@ -38,7 +39,7 @@ When both repositories are next to each other, install the library in editable m
 
 ```bash
 py -m pip install -e ../warframe-damage-calculator
-py -m pip install -r requirements.txt
+py -m pip install "reflex>=0.9.6.post1,<0.10"
 reflex run
 ```
 
