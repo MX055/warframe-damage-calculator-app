@@ -267,3 +267,16 @@ body {
 .damage-editor-grid > * {
   min-width: 0;
 }
+
+
+/* Make select controls fill their complete grid column. Reflex/Radix may
+   otherwise size the trigger to its current text content. */
+.full-width-select,
+.full-width-select > button,
+.full-width-select [data-radix-select-trigger],
+button.full-width-select {
+  width: 100% !important;
+  min-width: 0 !important;
+  max-width: none !important;
+  box-sizing: border-box;
+}

@@ -57,7 +57,10 @@ def select_control(
             on_change=on_change,
             disabled=disabled,
             width="100%",
+            min_width="0",
+            max_width="100%",
             position="popper",
+            class_name="full-width-select",
         ),
     )
 
