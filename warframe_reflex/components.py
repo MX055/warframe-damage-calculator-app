@@ -913,7 +913,6 @@ def upgrades_section() -> rx.Component:
             width="100%",
         ),
         rx.vstack(
-            rx.heading("External Buffs", size="4"),
             external_buffs(),
             align="start",
             gap="3",
