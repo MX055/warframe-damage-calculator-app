@@ -268,3 +268,27 @@ body {
   min-width: 0;
 }
 
+/* Force the actual Radix Select trigger—not a non-DOM Select root—to fill
+   its form column. The data attribute is attached directly to the button,
+   and !important makes the rule independent of CSS ordering in production. */
+.labeled-control {
+  align-items: stretch !important;
+  width: 100% !important;
+  min-width: 0 !important;
+}
+
+.labeled-control > * {
+  min-width: 0;
+}
+
+.full-width-select-trigger,
+[data-full-width-select="true"] {
+  display: flex !important;
+  width: 100% !important;
+  min-width: 0 !important;
+  max-width: none !important;
+  flex: 1 1 100% !important;
+  align-self: stretch !important;
+  box-sizing: border-box !important;
+}
+

@@ -35,9 +35,11 @@ def labeled_control(label: str, control: rx.Component) -> rx.Component:
     return rx.vstack(
         rx.text(label, class_name="field-label"),
         control,
-        align="start",
+        align="stretch",
         gap="1",
         width="100%",
+        min_width="0",
+        class_name="labeled-control",
     )
 
 
@@ -49,24 +51,35 @@ def select_control(
     *,
     disabled=False,
 ) -> rx.Component:
+    """Render a select whose actual Radix trigger always fills its column.
+
+    The high-level ``rx.select`` wrapper may attach sizing props to a generated
+    wrapper differently between development and production builds. Using the
+    low-level API lets us put the full-width class directly on the trigger
+    button, which is the visible interactive element.
+    """
     return labeled_control(
         label,
-        rx.box(
-            rx.select(
-                options,
-                value=value,
-                on_change=on_change,
-                disabled=disabled,
+        rx.select.root(
+            rx.select.trigger(
                 width="100%",
                 min_width="0",
                 max_width="100%",
-                position="popper",
-                style={"width": "100%", "min_width": "0"},
+                class_name="full-width-select-trigger",
+                custom_attrs={"data-full-width-select": "true"},
             ),
-            width="100%",
-            min_width="0",
-            max_width="100%",
-            style={"width": "100%", "min_width": "0"},
+            rx.select.content(
+                rx.select.group(
+                    rx.foreach(
+                        options,
+                        lambda option: rx.select.item(option, value=option),
+                    ),
+                ),
+                position="popper",
+            ),
+            value=value,
+            on_change=on_change,
+            disabled=disabled,
         ),
     )
 
