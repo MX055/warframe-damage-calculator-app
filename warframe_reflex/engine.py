@@ -107,9 +107,19 @@ def is_non_empty_upgrade(item: Upgrade) -> bool:
     )
 
 
-def format_stat_value(value: float | int | bool) -> str:
+def format_stat_value(
+    value: float | int | bool,
+    *,
+    field_name: str | None = None,
+) -> str:
     if isinstance(value, bool):
         return "Yes" if value else "No"
+
+    # Secondary Enervate stores the number of Big Critical Hits required
+    # before the bonus resets. It is a count, not a percentage.
+    if field_name == "secondary_enervate":
+        return str(int(value))
+
     if isinstance(value, int):
         return str(value)
     return f"{value:,.1%}"
@@ -120,18 +130,31 @@ def upgrade_stat_rows(upgrade: Upgrade) -> list[DisplayRow]:
     for damage_type, damage_value in upgrade.damage_dist:
         if damage_value != 0:
             rows.append(
-                DisplayRow(field_label(damage_type), format_stat_value(damage_value))
+                DisplayRow(
+                    field_label(damage_type),
+                    format_stat_value(damage_value, field_name=damage_type),
+                )
             )
 
     for field_name in UPGRADE_SCALAR_FIELDS:
         value = getattr(upgrade, field_name, 0)
         if value != 0:
-            rows.append(DisplayRow(field_label(field_name), format_stat_value(value)))
+            rows.append(
+                DisplayRow(
+                    field_label(field_name),
+                    format_stat_value(value, field_name=field_name),
+                )
+            )
 
     for field_name in UPGRADE_BOOL_FIELDS:
         value = getattr(upgrade, field_name, False)
         if value:
-            rows.append(DisplayRow(field_label(field_name), format_stat_value(value)))
+            rows.append(
+                DisplayRow(
+                    field_label(field_name),
+                    format_stat_value(value, field_name=field_name),
+                )
+            )
     return rows
 
 

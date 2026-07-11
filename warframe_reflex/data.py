@@ -378,6 +378,28 @@ def database_upgrade(
         return None
 
     loaded_upgrade = copy.deepcopy(loaded_upgrade)
+
+    # The database loader may apply the Arcane's stacking multiplier to every
+    # numeric field. For Secondary Enervate, ``secondary_enervate`` is not a
+    # stackable percentage: it is the number of Big Critical Hits before the
+    # Arcane resets (1 at rank 0 through 6 at rank 5). Normalize it here so
+    # both the calculator and the UI receive the correct value.
+    if normalized_database_key(upgrade_name) == "secondary enervate":
+        metadata = raw_upgrade_metadata(upgrade_name, kind=kind)
+        try:
+            max_rank = max(0, int(metadata.get("max_rank", 5)))
+        except (TypeError, ValueError):
+            max_rank = 5
+        selected_rank = max_rank if rank is None else max(0, min(int(rank), max_rank))
+        loaded_upgrade = replace(
+            loaded_upgrade,
+            secondary_enervate=selected_rank + 1,
+            # Secondary Enervate is modeled entirely by its reset-count
+            # mechanic. The database's flat critical-chance field should not
+            # be applied or shown as a separate stat.
+            flat_crit_chance=0.0,
+        )
+
     if is_bow and condition:
         extra_fire_rate = _bow_fire_rate_bonus(
             upgrade_name,
