@@ -1,0 +1,2 @@
+reflex>=0.8.28,<0.9
+warframe-damage-calculator @ git+https://github.com/AAAA0001/warframe-damage-calculator.git@main
