@@ -17,4 +17,4 @@ app.add_page(
 )
 
 # run localy: .\.venv\Scripts\python.exe -m reflex run
-# deploy app: .\.venv\Scripts\python.exe -m reflex deploy --app-id b088ad07-e313-4948-a097-7a42b4f2844d --hostname warframe-damage-calculator
+# deploy app: .\.venv\Scripts\python.exe -m reflex deploy --app-id b088ad07-e313-4948-a097-7a42b4f2844d
