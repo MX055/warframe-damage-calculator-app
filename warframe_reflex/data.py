@@ -141,14 +141,14 @@ def database_conditional_info(
     unique_labels: list[str] = []
     for label in raw_labels:
         normalized = normalized_database_key(label)
-        if normalized == "bow":
+        if normalized in {"bow", "sacrificial set"}:
             continue
         if normalized and normalized not in {
             normalized_database_key(existing) for existing in unique_labels
         }:
             unique_labels.append(label)
 
-    # A conditional entry whose only condition is "bow" is automatic.
+    # Bow and set-bonus conditions are derived from the configured weapon/build.
     if raw_labels and not unique_labels:
         return False, ""
 
@@ -159,6 +159,29 @@ def database_conditional_info(
         return True, readable
 
     return True, "Conditional Bonus"
+
+
+def database_upgrade_condition_labels(
+    upgrade_name: str | None,
+    *,
+    is_arcane_slot: bool,
+) -> set[str]:
+    """Return normalized condition labels used by an upgrade's bonus fields."""
+    if not upgrade_name:
+        return set()
+    kind = "arcane" if is_arcane_slot else "mod"
+    metadata = raw_upgrade_metadata(upgrade_name, kind=kind)
+    conditions = metadata.get("conditions") or {}
+    conditionals = metadata.get("conditionals") or {}
+    labels: set[str] = set()
+    if isinstance(conditions, dict) and isinstance(conditionals, dict):
+        for field_name in conditionals:
+            labels.update(
+                normalized_database_key(label)
+                for label in _condition_text_values(conditions.get(field_name))
+                if label
+            )
+    return labels
 
 
 def weapon_compatibility_terms(

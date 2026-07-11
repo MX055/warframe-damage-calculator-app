@@ -21,6 +21,7 @@ from .constants import (
 )
 from .data import (
     database_conditional_info,
+    database_upgrade_condition_labels,
     database_max_stacks,
     database_rank_bounds,
     database_upgrade,
@@ -760,6 +761,24 @@ class CalculatorState(rx.State):
         selected = self.slot_selected_upgrades[index]
         if selected == CUSTOM:
             return self._custom_upgrade_from_fields(config["label"], self.slot_fields[index])
+        condition = self.slot_conditions_enabled[index]
+        condition_labels = database_upgrade_condition_labels(
+            selected,
+            is_arcane_slot=config["kind"] == "arcane",
+        )
+        if "sacrificial set" in condition_labels:
+            equipped_set_mods = {
+                equipped
+                for slot_index, equipped in enumerate(self.slot_selected_upgrades)
+                if equipped != CUSTOM
+                and "sacrificial set"
+                in database_upgrade_condition_labels(
+                    equipped,
+                    is_arcane_slot=SLOT_CONFIGS[slot_index]["kind"] == "arcane",
+                )
+            }
+            condition = len(equipped_set_mods) >= 2
+
         loaded = database_upgrade(
             selected,
             kind=config["kind"],
@@ -769,7 +788,7 @@ class CalculatorState(rx.State):
                 if self.slot_max_stacks[index] > 0
                 else None
             ),
-            condition=self.slot_conditions_enabled[index],
+            condition=condition,
             is_bow=self._is_bow(),
         )
         return loaded or Upgrade(name=selected)
