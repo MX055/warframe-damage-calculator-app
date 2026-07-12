@@ -851,6 +851,21 @@ class CalculatorState(rx.State):
 
         base_stats = self._custom_base_stats() if self.custom_weapon else {}
 
+        # The v0.5 API keeps conditional and stacking values on the Upgrade and
+        # activates them through the build context when the weapon is configured.
+        build_context: dict[str, bool | int] = {}
+        for index, upgrade in enumerate(slot_upgrades):
+            enabled = self.slot_conditions_enabled[index]
+            stack_count = (
+                self.slot_stacks[index]
+                if self.slot_max_stacks[index] > 0
+                else 0
+            )
+            for _field, (_value, condition_name) in upgrade.conditional_stats.items():
+                build_context[condition_name] = enabled
+            for _field, (_value, condition_name) in upgrade.stacking_stats.items():
+                build_context[condition_name] = stack_count
+
         try:
             weapon = configured_weapon(
                 self.selected_weapon_type,
@@ -858,12 +873,14 @@ class CalculatorState(rx.State):
                 custom_weapon=self.custom_weapon,
                 base_stats=base_stats,
                 upgrades=upgrades,
+                context=build_context,
             )
             contribution_lookup = contribution_lookup_for_weapon(
                 weapon,
                 self.selected_weapon_type,
                 base_stats if self.custom_weapon else None,
                 upgrades,
+                context=build_context,
             )
 
             contributions = []

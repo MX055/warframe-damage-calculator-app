@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import copy
 import json
-from dataclasses import replace
 from functools import lru_cache
 from importlib import resources
 from pathlib import Path
@@ -359,8 +358,6 @@ def _cached_database_upgrade(
         upgrade_name,
         type=kind,
         rank=rank,
-        stacks=stacks,
-        condition=condition,
     )
 
 
@@ -439,26 +436,14 @@ def database_upgrade(
         except (TypeError, ValueError):
             max_rank = 5
         selected_rank = max_rank if rank is None else max(0, min(int(rank), max_rank))
-        loaded_upgrade = replace(
-            loaded_upgrade,
-            secondary_enervate=selected_rank + 1,
-            # Secondary Enervate is modeled entirely by its reset-count
-            # mechanic. The database's flat critical-chance field should not
-            # be applied or shown as a separate stat.
-            flat_crit_chance=0.0,
-        )
+        loaded_upgrade.stats = dict(loaded_upgrade.stats)
+        loaded_upgrade.stats["secondary_enervate"] = selected_rank + 1
+        loaded_upgrade.stats.pop("flat_crit_chance", None)
+        loaded_upgrade.conditional_stats = dict(loaded_upgrade.conditional_stats)
+        loaded_upgrade.conditional_stats.pop("flat_crit_chance", None)
+        loaded_upgrade.stacking_stats = dict(loaded_upgrade.stacking_stats)
+        loaded_upgrade.stacking_stats.pop("flat_crit_chance", None)
 
-    if is_bow and condition:
-        extra_fire_rate = _bow_fire_rate_bonus(
-            upgrade_name,
-            kind=kind,
-            rank=rank,
-        )
-        if extra_fire_rate:
-            loaded_upgrade = replace(
-                loaded_upgrade,
-                fire_rate=loaded_upgrade.fire_rate + extra_fire_rate,
-            )
     return loaded_upgrade
 
 

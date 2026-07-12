@@ -85,26 +85,20 @@ def build_upgrade(name: str, values: dict[str, float | int]) -> Upgrade:
         for field_name in UPGRADE_SCALAR_FIELDS
         if field_name != "secondary_enervate"
     }
-    return Upgrade(
-        name=name,
-        damage_dist=damage_distribution,
-        **scalar_values,
-        secondary_enervate=int(values.get("secondary_enervate", 0)),
-    )
+    stats = dict(scalar_values)
+    if damage_values:
+        stats["damage_dist"] = damage_distribution
+    secondary_enervate = int(values.get("secondary_enervate", 0))
+    if secondary_enervate:
+        stats["secondary_enervate"] = secondary_enervate
+    for field_name in UPGRADE_BOOL_FIELDS:
+        if bool(values.get(field_name, False)):
+            stats[field_name] = True
+    return Upgrade(name=name, stats=stats)
 
 
 def is_non_empty_upgrade(item: Upgrade) -> bool:
-    return (
-        any(value != 0 for _, value in item.damage_dist)
-        or any(
-            getattr(item, field_name, 0) != 0
-            for field_name in UPGRADE_SCALAR_FIELDS
-        )
-        or any(
-            getattr(item, field_name, False)
-            for field_name in UPGRADE_BOOL_FIELDS
-        )
-    )
+    return bool(item.stats or item.conditional_stats or item.stacking_stats)
 
 
 def format_stat_value(
@@ -127,36 +121,23 @@ def format_stat_value(
 
 def upgrade_stat_rows(upgrade: Upgrade) -> list[DisplayRow]:
     rows: list[DisplayRow] = []
-    for damage_type, damage_value in upgrade.damage_dist:
-        if damage_value != 0:
-            rows.append(
-                DisplayRow(
-                    field_label(damage_type),
-                    format_stat_value(damage_value, field_name=damage_type),
-                )
-            )
 
-    for field_name in UPGRADE_SCALAR_FIELDS:
-        value = getattr(upgrade, field_name, 0)
-        if value != 0:
-            rows.append(
-                DisplayRow(
-                    field_label(field_name),
-                    format_stat_value(value, field_name=field_name),
-                )
-            )
+    def add_stat(field_name: str, value, suffix: str = "") -> None:
+        if field_name == "damage_dist" and isinstance(value, dist):
+            for damage_type, damage_value in value:
+                if damage_value != 0:
+                    rows.append(DisplayRow(field_label(damage_type) + suffix, format_stat_value(damage_value, field_name=damage_type)))
+            return
+        if value != 0 and value is not False:
+            rows.append(DisplayRow(field_label(field_name) + suffix, format_stat_value(value, field_name=field_name)))
 
-    for field_name in UPGRADE_BOOL_FIELDS:
-        value = getattr(upgrade, field_name, False)
-        if value:
-            rows.append(
-                DisplayRow(
-                    field_label(field_name),
-                    format_stat_value(value, field_name=field_name),
-                )
-            )
+    for field_name, value in upgrade.stats.items():
+        add_stat(field_name, value)
+    for field_name, (value, condition) in upgrade.conditional_stats.items():
+        add_stat(field_name, value, f" ({condition})")
+    for field_name, (value, condition) in upgrade.stacking_stats.items():
+        add_stat(field_name, value, f" / stack ({condition})")
     return rows
-
 
 def progenitor_upgrade(element: str, value: float, no_effect: str) -> Upgrade:
     if element == no_effect or value <= 0:
@@ -164,7 +145,7 @@ def progenitor_upgrade(element: str, value: float, no_effect: str) -> Upgrade:
     return Upgrade(
         name="Progenitor",
         category="progenitor",
-        damage_dist=dist(**{element: value}),
+        stats={"damage_dist": dist(**{element: value})},
     )
 
 
@@ -175,6 +156,7 @@ def configured_weapon(
     custom_weapon: bool,
     base_stats: dict,
     upgrades: list[Upgrade],
+    context: dict[str, bool | int] | None = None,
 ):
     weapon_type = WEAPON_TYPES[weapon_type_name]
     if custom_weapon:
@@ -185,7 +167,7 @@ def configured_weapon(
             raise LookupError(f"Could not load weapon: {selected_weapon_name}")
 
     if upgrades:
-        weapon.configure(Build(*upgrades))
+        weapon.configure(Build(*upgrades), context=context)
     return weapon
 
 
@@ -225,13 +207,14 @@ def compute_contribution_proportions(
     weapon_type_name: str,
     base_stats: dict,
     upgrades: list[Upgrade],
+    context: dict[str, bool | int] | None = None,
 ) -> list[tuple[Upgrade, float]]:
     if not upgrades:
         return []
 
     weapon_type = WEAPON_TYPES[weapon_type_name]
     full_weapon = weapon_type(**base_stats)
-    full_weapon.configure(Build(*upgrades))
+    full_weapon.configure(Build(*upgrades), context=context)
     total_dps = full_weapon.stats.total_dps
     contributions: list[tuple[Upgrade, float]] = []
 
@@ -239,7 +222,7 @@ def compute_contribution_proportions(
         remaining = [item for other_index, item in enumerate(upgrades) if other_index != index]
         comparison_weapon = weapon_type(**base_stats)
         if remaining:
-            comparison_weapon.configure(Build(*remaining))
+            comparison_weapon.configure(Build(*remaining), context=context)
         contributions.append((upgrade, total_dps - comparison_weapon.stats.total_dps))
 
     contribution_total = sum(value for _, value in contributions) or 1.0
@@ -251,6 +234,7 @@ def contribution_lookup_for_weapon(
     weapon_type_name: str,
     base_stats: dict | None,
     upgrades: list[Upgrade],
+    context: dict[str, bool | int] | None = None,
 ):
     for attribute_name in (
         "contribution_proportions",
@@ -264,7 +248,7 @@ def contribution_lookup_for_weapon(
 
     if base_stats is None:
         return []
-    return compute_contribution_proportions(weapon_type_name, base_stats, upgrades)
+    return compute_contribution_proportions(weapon_type_name, base_stats, upgrades, context)
 
 
 def format_contribution(value: float | None) -> str:
