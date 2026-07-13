@@ -50,9 +50,9 @@ PROGENITOR_ELEMENT_OPTIONS = (
 )
 
 WEAPON_DATABASE_SECTIONS = {
-    "Primary": "primaries",
-    "Secondary": "secondaries",
-    "Melee": "melees",
+    "Primary": "primary",
+    "Secondary": "secondary",
+    "Melee": "melee",
 }
 
 WEAPON_COMPATIBILITY_FAMILIES = {

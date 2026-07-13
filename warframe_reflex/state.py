@@ -4,7 +4,8 @@ import copy
 from typing import Any
 
 import reflex as rx
-from warframe_damage_calculator import Upgrade, dist
+from warframe_damage_calculator import Upgrade
+from warframe_damage_calculator.models.dist import dist
 
 from .constants import (
     ARCANE_FIELD,
@@ -748,7 +749,7 @@ class CalculatorState(rx.State):
         if self.selected_weapon_type == "Melee":
             return {
                 "type": "melee",
-                "damage_dist": self._damage_dist(self.direct_damage_fields),
+                "damage": self._damage_dist(self.direct_damage_fields),
                 "forced_procs": self._damage_dist(self.forced_proc_fields),
                 "crit_chance": self.base_crit_chance,
                 "crit_damage": self.base_crit_damage,
@@ -759,9 +760,9 @@ class CalculatorState(rx.State):
         weapon_subtype = self.selected_weapon_category.casefold()
         return {
             "type": weapon_subtype,
-            "damage_dist": self._damage_dist(self.direct_damage_fields),
+            "damage": self._damage_dist(self.direct_damage_fields),
             "forced_procs": self._damage_dist(self.forced_proc_fields),
-            "explosion_damage_dist": self._damage_dist(self.explosion_damage_fields),
+            "explosion_damage": self._damage_dist(self.explosion_damage_fields),
             "explosion_forced_procs": self._damage_dist(
                 self.explosion_forced_proc_fields
             ),
@@ -851,21 +852,6 @@ class CalculatorState(rx.State):
 
         base_stats = self._custom_base_stats() if self.custom_weapon else {}
 
-        # The v0.5 API keeps conditional and stacking values on the Upgrade and
-        # activates them through the build context when the weapon is configured.
-        build_context: dict[str, bool | int] = {}
-        for index, upgrade in enumerate(slot_upgrades):
-            enabled = self.slot_conditions_enabled[index]
-            stack_count = (
-                self.slot_stacks[index]
-                if self.slot_max_stacks[index] > 0
-                else 0
-            )
-            for _field, (_value, condition_name) in upgrade.conditional_stats.items():
-                build_context[condition_name] = enabled
-            for _field, (_value, condition_name) in upgrade.stacking_stats.items():
-                build_context[condition_name] = stack_count
-
         try:
             weapon = configured_weapon(
                 self.selected_weapon_type,
@@ -873,14 +859,12 @@ class CalculatorState(rx.State):
                 custom_weapon=self.custom_weapon,
                 base_stats=base_stats,
                 upgrades=upgrades,
-                context=build_context,
             )
             contribution_lookup = contribution_lookup_for_weapon(
                 weapon,
                 self.selected_weapon_type,
                 base_stats if self.custom_weapon else None,
                 upgrades,
-                context=build_context,
             )
 
             contributions = []

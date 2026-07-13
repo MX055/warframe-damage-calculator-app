@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from typing import Iterable
 
-from warframe_damage_calculator import Build, Upgrade, dist
+from warframe_damage_calculator import Build, Upgrade
+from warframe_damage_calculator.models.dist import dist
 
 from .constants import (
     DAMAGE_TYPES,
@@ -78,16 +79,13 @@ def build_upgrade(name: str, values: dict[str, float | int]) -> Upgrade:
         for damage_type in DAMAGE_TYPES
         if float(values.get(damage_type, 0.0)) != 0
     }
-    damage_distribution = dist(**damage_values) if damage_values else dist()
-
     scalar_values = {
         field_name: float(values.get(field_name, 0.0))
         for field_name in UPGRADE_SCALAR_FIELDS
         if field_name != "secondary_enervate"
     }
     stats = dict(scalar_values)
-    if damage_values:
-        stats["damage_dist"] = damage_distribution
+    stats.update(damage_values)
     secondary_enervate = int(values.get("secondary_enervate", 0))
     if secondary_enervate:
         stats["secondary_enervate"] = secondary_enervate
@@ -98,7 +96,12 @@ def build_upgrade(name: str, values: dict[str, float | int]) -> Upgrade:
 
 
 def is_non_empty_upgrade(item: Upgrade) -> bool:
-    return bool(item.stats or item.conditional_stats or item.stacking_stats)
+    return bool(
+        item.stats
+        or item.conditional_stats
+        or item.stacking_stats
+        or item.rank_locked_stats
+    )
 
 
 def format_stat_value(
@@ -123,7 +126,7 @@ def upgrade_stat_rows(upgrade: Upgrade) -> list[DisplayRow]:
     rows: list[DisplayRow] = []
 
     def add_stat(field_name: str, value, suffix: str = "") -> None:
-        if field_name == "damage_dist" and isinstance(value, dist):
+        if field_name == "damage" and isinstance(value, dist):
             for damage_type, damage_value in value:
                 if damage_value != 0:
                     rows.append(DisplayRow(field_label(damage_type) + suffix, format_stat_value(damage_value, field_name=damage_type)))
@@ -137,6 +140,8 @@ def upgrade_stat_rows(upgrade: Upgrade) -> list[DisplayRow]:
         add_stat(field_name, value, f" ({condition})")
     for field_name, (value, condition) in upgrade.stacking_stats.items():
         add_stat(field_name, value, f" / stack ({condition})")
+    for field_name, (value, required_rank) in upgrade.rank_locked_stats.items():
+        add_stat(field_name, value, f" (rank {required_rank})")
     return rows
 
 def progenitor_upgrade(element: str, value: float, no_effect: str) -> Upgrade:
@@ -145,7 +150,7 @@ def progenitor_upgrade(element: str, value: float, no_effect: str) -> Upgrade:
     return Upgrade(
         name="Progenitor",
         category="progenitor",
-        stats={"damage_dist": dist(**{element: value})},
+        stats={element: value},
     )
 
 
@@ -156,7 +161,6 @@ def configured_weapon(
     custom_weapon: bool,
     base_stats: dict,
     upgrades: list[Upgrade],
-    context: dict[str, bool | int] | None = None,
 ):
     weapon_type = WEAPON_TYPES[weapon_type_name]
     if custom_weapon:
@@ -167,7 +171,7 @@ def configured_weapon(
             raise LookupError(f"Could not load weapon: {selected_weapon_name}")
 
     if upgrades:
-        weapon.configure(Build(*upgrades), context=context)
+        weapon.configure(Build(*upgrades))
     return weapon
 
 
@@ -207,14 +211,13 @@ def compute_contribution_proportions(
     weapon_type_name: str,
     base_stats: dict,
     upgrades: list[Upgrade],
-    context: dict[str, bool | int] | None = None,
 ) -> list[tuple[Upgrade, float]]:
     if not upgrades:
         return []
 
     weapon_type = WEAPON_TYPES[weapon_type_name]
     full_weapon = weapon_type(**base_stats)
-    full_weapon.configure(Build(*upgrades), context=context)
+    full_weapon.configure(Build(*upgrades))
     total_dps = full_weapon.stats.total_dps
     contributions: list[tuple[Upgrade, float]] = []
 
@@ -222,7 +225,7 @@ def compute_contribution_proportions(
         remaining = [item for other_index, item in enumerate(upgrades) if other_index != index]
         comparison_weapon = weapon_type(**base_stats)
         if remaining:
-            comparison_weapon.configure(Build(*remaining), context=context)
+            comparison_weapon.configure(Build(*remaining))
         contributions.append((upgrade, total_dps - comparison_weapon.stats.total_dps))
 
     contribution_total = sum(value for _, value in contributions) or 1.0
@@ -234,7 +237,6 @@ def contribution_lookup_for_weapon(
     weapon_type_name: str,
     base_stats: dict | None,
     upgrades: list[Upgrade],
-    context: dict[str, bool | int] | None = None,
 ):
     for attribute_name in (
         "contribution_proportions",
@@ -248,7 +250,7 @@ def contribution_lookup_for_weapon(
 
     if base_stats is None:
         return []
-    return compute_contribution_proportions(weapon_type_name, base_stats, upgrades, context)
+    return compute_contribution_proportions(weapon_type_name, base_stats, upgrades)
 
 
 def format_contribution(value: float | None) -> str:
@@ -299,13 +301,13 @@ def weakpoint_metrics(weapon) -> list[MetricRow]:
 def ranged_misc_metrics(weapon) -> list[MetricRow]:
     proc_total = sum(
         (
-            weapon.stats.effective.damage_dist.weight(damage_type)
-            + weapon.stats.effective.explosion_damage_dist.weight(damage_type)
+            weapon.stats.effective.damage.weight(damage_type)
+            + weapon.stats.effective.explosion_damage.weight(damage_type)
         )
         * weapon.stats.average_procs_per_shot
         for damage_type, _ in (
-            weapon.stats.effective.damage_dist
-            + weapon.stats.effective.explosion_damage_dist
+            weapon.stats.effective.damage
+            + weapon.stats.effective.explosion_damage
         )
     )
     return [
@@ -320,27 +322,27 @@ def effective_damage_rows(weapon, *, melee: bool) -> list[DamageResultRow]:
             DamageResultRow(
                 damage_type=damage_type.title(),
                 damage=f"{damage:,.2f}",
-                weight=f"{weapon.stats.effective.damage_dist.weight(damage_type):,.2f}",
+                weight=f"{weapon.stats.effective.damage.weight(damage_type):,.2f}",
                 proc_chance=(
-                    f"{weapon.stats.effective.damage_dist.weight(damage_type) * weapon.stats.effective.status_chance:.1%}"
+                    f"{weapon.stats.effective.damage.weight(damage_type) * weapon.stats.effective.status_chance:.1%}"
                 ),
             )
-            for damage_type, damage in weapon.stats.effective.damage_dist
+            for damage_type, damage in weapon.stats.effective.damage
         ]
 
-    combined = weapon.stats.effective.damage_dist + weapon.stats.effective.explosion_damage_dist
+    combined = weapon.stats.effective.damage + weapon.stats.effective.explosion_damage
     return [
         DamageResultRow(
             damage_type=damage_type.title(),
             damage=f"{damage:,.2f}",
             direct_weight=(
-                f"{weapon.stats.effective.damage_dist.weight(damage_type):,.2f}"
+                f"{weapon.stats.effective.damage.weight(damage_type):,.2f}"
             ),
             explosion_weight=(
-                f"{weapon.stats.effective.explosion_damage_dist.weight(damage_type):,.2f}"
+                f"{weapon.stats.effective.explosion_damage.weight(damage_type):,.2f}"
             ),
             proc_chance=(
-                f"{(weapon.stats.effective.damage_dist.weight(damage_type) + weapon.stats.effective.explosion_damage_dist.weight(damage_type)) * weapon.stats.average_procs_per_shot:.1%}"
+                f"{(weapon.stats.effective.damage.weight(damage_type) + weapon.stats.effective.explosion_damage.weight(damage_type)) * weapon.stats.average_procs_per_shot:.1%}"
             ),
         )
         for damage_type, damage in combined

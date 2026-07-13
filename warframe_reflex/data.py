@@ -80,12 +80,12 @@ def raw_weapon_metadata(weapon_type_name: str, weapon_name: str | None) -> dict:
 def raw_upgrade_metadata(upgrade_name: str, *, kind: str | None = None) -> dict:
     upgrades = raw_upgrades_database()
     if kind == "mod":
-        return upgrades.get("mods", {}).get(upgrade_name, {}) or {}
+        return upgrades.get("mod", {}).get(upgrade_name, {}) or {}
     if kind == "arcane":
-        return upgrades.get("arcanes", {}).get(upgrade_name, {}) or {}
+        return upgrades.get("arcane", {}).get(upgrade_name, {}) or {}
     return (
-        upgrades.get("mods", {}).get(upgrade_name)
-        or upgrades.get("arcanes", {}).get(upgrade_name)
+        upgrades.get("mod", {}).get(upgrade_name)
+        or upgrades.get("arcane", {}).get(upgrade_name)
         or {}
     )
 
@@ -127,15 +127,14 @@ def database_conditional_info(
 
     kind = "arcane" if is_arcane_slot else "mod"
     metadata = raw_upgrade_metadata(upgrade_name, kind=kind)
-    conditionals = metadata.get("conditionals") or {}
+    conditionals = metadata.get("conditional_stats") or {}
     if not isinstance(conditionals, dict) or not conditionals:
         return False, ""
 
-    conditions = metadata.get("conditions") or {}
     raw_labels: list[str] = []
-    for field_name in conditionals:
-        if isinstance(conditions, dict):
-            raw_labels.extend(_condition_text_values(conditions.get(field_name)))
+    for raw_entry in conditionals.values():
+        if isinstance(raw_entry, (list, tuple)) and len(raw_entry) == 2:
+            raw_labels.extend(_condition_text_values(raw_entry[1]))
 
     unique_labels: list[str] = []
     for label in raw_labels:
@@ -170,14 +169,15 @@ def database_upgrade_condition_labels(
         return set()
     kind = "arcane" if is_arcane_slot else "mod"
     metadata = raw_upgrade_metadata(upgrade_name, kind=kind)
-    conditions = metadata.get("conditions") or {}
-    conditionals = metadata.get("conditionals") or {}
+    conditionals = metadata.get("conditional_stats") or {}
     labels: set[str] = set()
-    if isinstance(conditions, dict) and isinstance(conditionals, dict):
-        for field_name in conditionals:
+    if isinstance(conditionals, dict):
+        for raw_entry in conditionals.values():
+            if not isinstance(raw_entry, (list, tuple)) or len(raw_entry) != 2:
+                continue
             labels.update(
                 normalized_database_key(label)
-                for label in _condition_text_values(conditions.get(field_name))
+                for label in _condition_text_values(raw_entry[1])
                 if label
             )
     return labels
@@ -290,12 +290,12 @@ def upgrade_names_for_ui(
     weapon_type_name = WEAPON_CATEGORY_TYPES[weapon_category]
     names: list[str] = []
     database_has_requested_items = bool(
-        (include_mods and "mods" in upgrades)
-        or (include_arcanes and "arcanes" in upgrades)
+        (include_mods and "mod" in upgrades)
+        or (include_arcanes and "arcane" in upgrades)
     )
 
     if include_mods:
-        for name, metadata in upgrades.get("mods", {}).items():
+        for name, metadata in upgrades.get("mod", {}).items():
             is_exilus = bool(metadata.get("is_exilus", False))
             if exilus_only != is_exilus:
                 continue
@@ -307,7 +307,7 @@ def upgrade_names_for_ui(
                 names.append(name)
 
     if include_arcanes:
-        for name, metadata in upgrades.get("arcanes", {}).items():
+        for name, metadata in upgrades.get("arcane", {}).items():
             if upgrade_matches_weapon_type(
                 metadata,
                 weapon_category,
@@ -354,10 +354,20 @@ def _cached_database_upgrade(
     stacks: int | None,
     condition: bool,
 ):
+    metadata = raw_upgrade_metadata(upgrade_name, kind=kind)
+    context: dict[str, bool | int] = {}
+    if rank is not None:
+        context["rank"] = rank
+    for raw_entry in (metadata.get("conditional_stats") or {}).values():
+        if isinstance(raw_entry, (list, tuple)) and len(raw_entry) == 2:
+            context[str(raw_entry[1])] = condition
+    for raw_entry in (metadata.get("stacking_stats") or {}).values():
+        if isinstance(raw_entry, (list, tuple)) and len(raw_entry) == 2:
+            context[str(raw_entry[1])] = stacks or 0
     return arsenal.get(
         upgrade_name,
         type=kind,
-        rank=rank,
+        context=context,
     )
 
 
@@ -371,36 +381,6 @@ def _condition_labels(value: object) -> set[str]:
     else:
         values = [value]
     return {normalized_database_key(item) for item in values if item}
-
-
-def _database_rank_multiplier(metadata: dict, rank: int | None) -> float:
-    if rank is None:
-        return 1.0
-    try:
-        max_rank = int(metadata.get("max_rank"))
-    except (TypeError, ValueError):
-        return 1.0
-    if max_rank <= 0:
-        return 1.0
-    clamped_rank = max(0, min(int(rank), max_rank))
-    return (clamped_rank + 1) / (max_rank + 1)
-
-
-def _bow_fire_rate_bonus(
-    upgrade_name: str,
-    *,
-    kind: str | None,
-    rank: int | None,
-) -> float:
-    metadata = raw_upgrade_metadata(upgrade_name, kind=kind)
-    conditions = metadata.get("conditions") or {}
-    if "bow" not in _condition_labels(conditions.get("fire_rate")):
-        return 0.0
-    try:
-        bonus = float((metadata.get("conditionals") or {}).get("fire_rate", 0.0))
-    except (TypeError, ValueError):
-        return 0.0
-    return bonus * _database_rank_multiplier(metadata, rank)
 
 
 def database_upgrade(
@@ -423,26 +403,6 @@ def database_upgrade(
         return None
 
     loaded_upgrade = copy.deepcopy(loaded_upgrade)
-
-    # The database loader may apply the Arcane's stacking multiplier to every
-    # numeric field. For Secondary Enervate, ``secondary_enervate`` is not a
-    # stackable percentage: it is the number of Big Critical Hits before the
-    # Arcane resets (1 at rank 0 through 6 at rank 5). Normalize it here so
-    # both the calculator and the UI receive the correct value.
-    if normalized_database_key(upgrade_name) == "secondary enervate":
-        metadata = raw_upgrade_metadata(upgrade_name, kind=kind)
-        try:
-            max_rank = max(0, int(metadata.get("max_rank", 5)))
-        except (TypeError, ValueError):
-            max_rank = 5
-        selected_rank = max_rank if rank is None else max(0, min(int(rank), max_rank))
-        loaded_upgrade.stats = dict(loaded_upgrade.stats)
-        loaded_upgrade.stats["secondary_enervate"] = selected_rank + 1
-        loaded_upgrade.stats.pop("flat_crit_chance", None)
-        loaded_upgrade.conditional_stats = dict(loaded_upgrade.conditional_stats)
-        loaded_upgrade.conditional_stats.pop("flat_crit_chance", None)
-        loaded_upgrade.stacking_stats = dict(loaded_upgrade.stacking_stats)
-        loaded_upgrade.stacking_stats.pop("flat_crit_chance", None)
 
     return loaded_upgrade
 
