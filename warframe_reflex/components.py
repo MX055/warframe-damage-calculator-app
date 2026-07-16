@@ -897,7 +897,7 @@ def upgrades_section() -> rx.Component:
     return rx.vstack(
         section_title(
             "Upgrades",
-            "Eight normal mod slots, one Arcane slot, one Exilus slot, and external buffs.",
+            "Eight normal mod slots, one Exilus slot, one Arcane slot, and external buffs.",
         ),
         rx.box(
             rx.box(

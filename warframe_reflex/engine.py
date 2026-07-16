@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Iterable
 
 from warframe_damage_calculator import Build, Upgrade
-from warframe_damage_calculator.models.dist import dist
+from warframe_damage_calculator.models.dist import Dist
 
 from .constants import (
     DAMAGE_TYPES,
@@ -92,16 +93,22 @@ def build_upgrade(name: str, values: dict[str, float | int]) -> Upgrade:
     for field_name in UPGRADE_BOOL_FIELDS:
         if bool(values.get(field_name, False)):
             stats[field_name] = True
-    return Upgrade(name=name, stats=stats)
+    return Upgrade({"stats": stats, "context": {"name": name}})
+
+
+def weapon_payload(weapon_type_name: str, base_stats: dict, *, name: str = "") -> dict:
+    stats = dict(base_stats)
+    context = {
+        "category": weapon_type_name.casefold(),
+        "type": str(stats.pop("type", weapon_type_name.casefold())),
+    }
+    if name:
+        context["name"] = name
+    return {"stats": stats, "context": context}
 
 
 def is_non_empty_upgrade(item: Upgrade) -> bool:
-    return bool(
-        item.stats
-        or item.conditional_stats
-        or item.stacking_stats
-        or item.rank_locked_stats
-    )
+    return bool(item.data.stats)
 
 
 def format_stat_value(
@@ -126,7 +133,7 @@ def upgrade_stat_rows(upgrade: Upgrade) -> list[DisplayRow]:
     rows: list[DisplayRow] = []
 
     def add_stat(field_name: str, value, suffix: str = "") -> None:
-        if field_name == "damage" and isinstance(value, dist):
+        if field_name == "damage" and isinstance(value, Dist):
             for damage_type, damage_value in value:
                 if damage_value != 0:
                     rows.append(DisplayRow(field_label(damage_type) + suffix, format_stat_value(damage_value, field_name=damage_type)))
@@ -134,23 +141,33 @@ def upgrade_stat_rows(upgrade: Upgrade) -> list[DisplayRow]:
         if value != 0 and value is not False:
             rows.append(DisplayRow(field_label(field_name) + suffix, format_stat_value(value, field_name=field_name)))
 
-    for field_name, value in upgrade.stats.items():
-        add_stat(field_name, value)
-    for field_name, (value, condition) in upgrade.conditional_stats.items():
-        add_stat(field_name, value, f" ({condition})")
-    for field_name, (value, condition) in upgrade.stacking_stats.items():
-        add_stat(field_name, value, f" / stack ({condition})")
-    for field_name, (value, required_rank) in upgrade.rank_locked_stats.items():
-        add_stat(field_name, value, f" (rank {required_rank})")
+    for field_name, effects in upgrade.data.stats.items():
+        for raw_effect in effects if isinstance(effects, list) else [effects]:
+            if isinstance(raw_effect, Mapping) and "value" in raw_effect:
+                value = raw_effect["value"]
+                condition = raw_effect.get("when")
+                suffix = (
+                    f" (rank {condition['rank']})"
+                    if isinstance(condition, Mapping) and "rank" in condition
+                    else f" / stack ({condition})"
+                    if raw_effect.get("stacking")
+                    else f" ({condition})"
+                    if condition
+                    else ""
+                )
+                add_stat(field_name, value, suffix)
+            else:
+                add_stat(field_name, raw_effect)
     return rows
 
 def progenitor_upgrade(element: str, value: float, no_effect: str) -> Upgrade:
     if element == no_effect or value <= 0:
-        return Upgrade(name="Progenitor", category="progenitor")
+        return Upgrade({"context": {"name": "Progenitor", "category": "progenitor"}})
     return Upgrade(
-        name="Progenitor",
-        category="progenitor",
-        stats={element: value},
+        {
+            "stats": {element: value},
+            "context": {"name": "Progenitor", "category": "progenitor"},
+        }
     )
 
 
@@ -164,7 +181,7 @@ def configured_weapon(
 ):
     weapon_type = WEAPON_TYPES[weapon_type_name]
     if custom_weapon:
-        weapon = weapon_type(**base_stats)
+        weapon = weapon_type(weapon_payload(weapon_type_name, base_stats, name=selected_weapon_name))
     else:
         weapon = database_weapon(selected_weapon_name, weapon_type_name)
         if weapon is None:
@@ -216,14 +233,15 @@ def compute_contribution_proportions(
         return []
 
     weapon_type = WEAPON_TYPES[weapon_type_name]
-    full_weapon = weapon_type(**base_stats)
+    payload = weapon_payload(weapon_type_name, base_stats)
+    full_weapon = weapon_type(payload)
     full_weapon.configure(Build(*upgrades))
     total_dps = full_weapon.stats.total_dps
     contributions: list[tuple[Upgrade, float]] = []
 
     for index, upgrade in enumerate(upgrades):
         remaining = [item for other_index, item in enumerate(upgrades) if other_index != index]
-        comparison_weapon = weapon_type(**base_stats)
+        comparison_weapon = weapon_type(payload)
         if remaining:
             comparison_weapon.configure(Build(*remaining))
         contributions.append((upgrade, total_dps - comparison_weapon.stats.total_dps))
@@ -244,7 +262,8 @@ def contribution_lookup_for_weapon(
         "contributions_proportions",
     ):
         try:
-            return contribution_items(getattr(weapon.stats, attribute_name))
+            value = getattr(weapon.stats, attribute_name)
+            return contribution_items(value() if callable(value) else value)
         except (AttributeError, TypeError):
             pass
 

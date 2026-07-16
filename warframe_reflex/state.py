@@ -5,7 +5,7 @@ from typing import Any
 
 import reflex as rx
 from warframe_damage_calculator import Upgrade
-from warframe_damage_calculator.models.dist import dist
+from warframe_damage_calculator.models.dist import Dist
 
 from .constants import (
     ARCANE_FIELD,
@@ -22,7 +22,6 @@ from .constants import (
 )
 from .data import (
     database_conditional_info,
-    database_upgrade_condition_labels,
     database_max_stacks,
     database_rank_bounds,
     database_upgrade,
@@ -714,7 +713,8 @@ class CalculatorState(rx.State):
             self.selected_weapon_type,
             self.selected_weapon,
         )
-        return bool(metadata.get("is_progenitor", False))
+        context = metadata.get("context") or {}
+        return bool(context.get("is_progenitor", False))
 
     def _get_damage_fields(self, group: str) -> list[EditorField]:
         return getattr(self, f"{group}_fields", [])
@@ -736,9 +736,9 @@ class CalculatorState(rx.State):
             if getattr(self, pending_name, "") not in labels:
                 setattr(self, pending_name, labels[0] if labels else "")
 
-    def _damage_dist(self, fields: list[EditorField]) -> dist:
-        return dist(
-            **{
+    def _damage_dist(self, fields: list[EditorField]) -> Dist:
+        return Dist(
+            {
                 field.name: float(field.value)
                 for field in fields
                 if float(field.value) > 0
@@ -789,32 +789,11 @@ class CalculatorState(rx.State):
     ) -> Upgrade:
         return build_upgrade(name, {field.name: field.value for field in fields})
 
-    def _is_bow(self) -> bool:
-        return self.selected_weapon_category == "Bow"
-
     def _slot_upgrade(self, index: int) -> Upgrade:
         config = SLOT_CONFIGS[index]
         selected = self.slot_selected_upgrades[index]
         if selected == CUSTOM:
             return self._custom_upgrade_from_fields(config["label"], self.slot_fields[index])
-        condition = self.slot_conditions_enabled[index]
-        condition_labels = database_upgrade_condition_labels(
-            selected,
-            is_arcane_slot=config["kind"] == "arcane",
-        )
-        if "sacrificial set" in condition_labels:
-            equipped_set_mods = {
-                equipped
-                for slot_index, equipped in enumerate(self.slot_selected_upgrades)
-                if equipped != CUSTOM
-                and "sacrificial set"
-                in database_upgrade_condition_labels(
-                    equipped,
-                    is_arcane_slot=SLOT_CONFIGS[slot_index]["kind"] == "arcane",
-                )
-            }
-            condition = len(equipped_set_mods) >= 2
-
         loaded = database_upgrade(
             selected,
             kind=config["kind"],
@@ -824,10 +803,9 @@ class CalculatorState(rx.State):
                 if self.slot_max_stacks[index] > 0
                 else None
             ),
-            condition=condition,
-            is_bow=self._is_bow(),
+            condition=self.slot_conditions_enabled[index],
         )
-        return loaded or Upgrade(name=selected)
+        return loaded or Upgrade({"context": {"name": selected}})
 
     def _recalculate(self):
         slot_upgrades = [self._slot_upgrade(index) for index in range(len(SLOT_CONFIGS))]

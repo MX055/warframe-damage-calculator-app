@@ -15,6 +15,18 @@ from .constants import (
     WEAPON_TYPES,
 )
 
+AUTOMATIC_CONDITIONS = {
+    "primary",
+    "rifle",
+    "bow",
+    "shotgun",
+    "sniper",
+    "secondary",
+    "pistol",
+    "melee",
+    "sacrificial set",
+}
+
 
 def type_query_for_weapon_type(weapon_type_name: str) -> str:
     return {
@@ -90,25 +102,28 @@ def raw_upgrade_metadata(upgrade_name: str, *, kind: str | None = None) -> dict:
     )
 
 
-def _condition_text_values(value: object) -> list[str]:
-    """Flatten condition metadata into readable labels."""
-    if value is None:
-        return []
-    if isinstance(value, str):
-        text = value.strip()
-        return [text] if text else []
-    if isinstance(value, dict):
-        values: list[str] = []
-        for nested_value in value.values():
-            values.extend(_condition_text_values(nested_value))
-        return values
-    if isinstance(value, (list, tuple, set)):
-        values: list[str] = []
-        for nested_value in value:
-            values.extend(_condition_text_values(nested_value))
-        return values
-    text = str(value).strip()
-    return [text] if text else []
+def metadata_context(metadata: dict) -> dict:
+    context = metadata.get("context") or {}
+    return context if isinstance(context, dict) else {}
+
+
+def iter_upgrade_effects(metadata: dict):
+    """Yield v0.6 effects as ``(stat, value, condition, stacking)``."""
+    stats = metadata.get("stats") or {}
+    for stat, effects in (stats.items() if isinstance(stats, dict) else ()):
+        for effect in effects if isinstance(effects, list) else [effects]:
+            if isinstance(effect, dict) and "value" in effect:
+                yield stat, effect["value"], effect.get("when"), bool(effect.get("stacking"))
+            else:
+                yield stat, effect, None, False
+
+
+def upgrade_conditions(metadata: dict, *, include_stacking: bool = True) -> list[str]:
+    return [
+        condition
+        for _stat, _value, condition, stacking in iter_upgrade_effects(metadata)
+        if isinstance(condition, str) and (include_stacking or not stacking)
+    ]
 
 
 def database_conditional_info(
@@ -127,60 +142,13 @@ def database_conditional_info(
 
     kind = "arcane" if is_arcane_slot else "mod"
     metadata = raw_upgrade_metadata(upgrade_name, kind=kind)
-    conditionals = metadata.get("conditional_stats") or {}
-    if not isinstance(conditionals, dict) or not conditionals:
-        return False, ""
-
-    raw_labels: list[str] = []
-    for raw_entry in conditionals.values():
-        if isinstance(raw_entry, (list, tuple)) and len(raw_entry) == 2:
-            raw_labels.extend(_condition_text_values(raw_entry[1]))
-
-    unique_labels: list[str] = []
-    for label in raw_labels:
-        normalized = normalized_database_key(label)
-        if normalized in {"bow", "sacrificial set"}:
-            continue
-        if normalized and normalized not in {
-            normalized_database_key(existing) for existing in unique_labels
-        }:
-            unique_labels.append(label)
-
-    # Bow and set-bonus conditions are derived from the configured weapon/build.
-    if raw_labels and not unique_labels:
-        return False, ""
-
-    if unique_labels:
-        readable = " / ".join(
-            label.replace("_", " ").strip().title() for label in unique_labels
-        )
-        return True, readable
-
-    return True, "Conditional Bonus"
-
-
-def database_upgrade_condition_labels(
-    upgrade_name: str | None,
-    *,
-    is_arcane_slot: bool,
-) -> set[str]:
-    """Return normalized condition labels used by an upgrade's bonus fields."""
-    if not upgrade_name:
-        return set()
-    kind = "arcane" if is_arcane_slot else "mod"
-    metadata = raw_upgrade_metadata(upgrade_name, kind=kind)
-    conditionals = metadata.get("conditional_stats") or {}
-    labels: set[str] = set()
-    if isinstance(conditionals, dict):
-        for raw_entry in conditionals.values():
-            if not isinstance(raw_entry, (list, tuple)) or len(raw_entry) != 2:
-                continue
-            labels.update(
-                normalized_database_key(label)
-                for label in _condition_text_values(raw_entry[1])
-                if label
-            )
-    return labels
+    labels = dict.fromkeys(
+        label
+        for label in upgrade_conditions(metadata, include_stacking=False)
+        if normalized_database_key(label) not in AUTOMATIC_CONDITIONS
+    )
+    readable = " / ".join(label.replace("_", " ").strip().title() for label in labels)
+    return (bool(readable), readable)
 
 
 def weapon_compatibility_terms(
@@ -192,7 +160,7 @@ def weapon_compatibility_terms(
     if selected_weapon_name and selected_weapon_name != "custom":
         metadata = raw_weapon_metadata(weapon_type_name, selected_weapon_name)
         terms.add(normalized_database_key(selected_weapon_name))
-        weapon_subtype = metadata.get("type")
+        weapon_subtype = metadata_context(metadata).get("type")
         if weapon_subtype:
             terms.add(normalized_database_key(weapon_subtype))
     return terms
@@ -204,7 +172,8 @@ def upgrade_matches_weapon_type(
     *,
     selected_weapon_name: str | None = None,
 ) -> bool:
-    raw_compatibility = metadata.get("compatibility", [])
+    context = metadata_context(metadata)
+    raw_compatibility = context.get("compatibility", [])
     if isinstance(raw_compatibility, str):
         raw_compatibility = [raw_compatibility]
     compatibility = {
@@ -219,20 +188,20 @@ def upgrade_matches_weapon_type(
     ):
         return False
 
-    requirements = metadata.get("requirements") or {}
+    requirements = context.get("requirements") or {}
     if not requirements or not selected_weapon_name or selected_weapon_name == "custom":
         return True
 
     weapon_type_name = WEAPON_CATEGORY_TYPES[weapon_category]
-    weapon_metadata = raw_weapon_metadata(weapon_type_name, selected_weapon_name)
-    for key, expected in requirements.items():
-        actual = weapon_metadata.get(key)
-        if isinstance(expected, list):
-            if actual not in expected:
-                return False
-        elif actual != expected:
-            return False
-    return True
+    weapon_metadata = metadata_context(
+        raw_weapon_metadata(weapon_type_name, selected_weapon_name)
+    )
+    return all(
+        weapon_metadata.get(key) in expected
+        if isinstance(expected, list)
+        else weapon_metadata.get(key) == expected
+        for key, expected in requirements.items()
+    )
 
 
 @lru_cache(maxsize=None)
@@ -256,7 +225,7 @@ def weapon_names_for_type(
                     for name, metadata in names.items()
                     if weapon_category is None
                     or weapon_category == "Melee"
-                    or normalized_database_key(metadata.get("type"))
+                    or normalized_database_key(metadata_context(metadata).get("type"))
                     == normalized_database_key(weapon_category)
                 ),
                 key=str.casefold,
@@ -296,7 +265,7 @@ def upgrade_names_for_ui(
 
     if include_mods:
         for name, metadata in upgrades.get("mod", {}).items():
-            is_exilus = bool(metadata.get("is_exilus", False))
+            is_exilus = bool(metadata_context(metadata).get("is_exilus", False))
             if exilus_only != is_exilus:
                 continue
             if upgrade_matches_weapon_type(
@@ -323,7 +292,7 @@ def upgrade_names_for_ui(
     for name, item in database_items(type_filter).items():
         if not isinstance(item, Upgrade):
             continue
-        category = str(getattr(item, "category", "") or "").casefold()
+        category = str(item.data.context.get("category", "") or "").casefold()
         if (include_mods and category == "mod") or (
             include_arcanes and category == "arcane"
         ):
@@ -358,29 +327,13 @@ def _cached_database_upgrade(
     context: dict[str, bool | int] = {}
     if rank is not None:
         context["rank"] = rank
-    for raw_entry in (metadata.get("conditional_stats") or {}).values():
-        if isinstance(raw_entry, (list, tuple)) and len(raw_entry) == 2:
-            context[str(raw_entry[1])] = condition
-    for raw_entry in (metadata.get("stacking_stats") or {}).values():
-        if isinstance(raw_entry, (list, tuple)) and len(raw_entry) == 2:
-            context[str(raw_entry[1])] = stacks or 0
-    return arsenal.get(
-        upgrade_name,
-        type=kind,
-        context=context,
-    )
-
-
-def _condition_labels(value: object) -> set[str]:
-    if value is None:
-        return set()
-    if isinstance(value, str):
-        values = [value]
-    elif isinstance(value, (list, tuple, set)):
-        values = value
-    else:
-        values = [value]
-    return {normalized_database_key(item) for item in values if item}
+    for _stat, _value, when, stacking in iter_upgrade_effects(metadata):
+        if isinstance(when, str) and normalized_database_key(when) not in AUTOMATIC_CONDITIONS:
+            context[when] = (stacks or 0) if stacking else condition
+    loaded = arsenal.get(upgrade_name, type=kind)
+    if isinstance(loaded, Upgrade):
+        loaded.data.context.update(context)
+    return loaded
 
 
 def database_upgrade(
@@ -390,7 +343,6 @@ def database_upgrade(
     rank: int | None = None,
     stacks: int | None = None,
     condition: bool = True,
-    is_bow: bool = False,
 ):
     loaded_upgrade = _cached_database_upgrade(
         upgrade_name,
@@ -399,12 +351,23 @@ def database_upgrade(
         stacks,
         condition,
     )
-    if not isinstance(loaded_upgrade, Upgrade):
-        return None
+    return copy.deepcopy(loaded_upgrade) if isinstance(loaded_upgrade, Upgrade) else None
 
-    loaded_upgrade = copy.deepcopy(loaded_upgrade)
 
-    return loaded_upgrade
+def _upgrade_limit(
+    upgrade_name: str | None,
+    *,
+    is_arcane_slot: bool,
+    key: str,
+    default: int | None,
+) -> int | None:
+    kind = "arcane" if is_arcane_slot else "mod"
+    value = metadata_context(raw_upgrade_metadata(upgrade_name or "", kind=kind)).get(key)
+    try:
+        value = default if value is None else max(0, int(value))
+    except (TypeError, ValueError):
+        return default
+    return value if value is None or value > 0 or key == "max_rank" else None
 
 
 def database_rank_bounds(
@@ -412,15 +375,10 @@ def database_rank_bounds(
     *,
     is_arcane_slot: bool,
 ) -> tuple[int, int]:
-    kind = "arcane" if is_arcane_slot else "mod"
-    metadata = raw_upgrade_metadata(upgrade_name or "", kind=kind)
-    max_rank = metadata.get("max_rank")
-    if max_rank is None:
-        return (0, 5 if is_arcane_slot else 10)
-    try:
-        return 0, max(0, int(max_rank))
-    except (TypeError, ValueError):
-        return (0, 5 if is_arcane_slot else 10)
+    default = 5 if is_arcane_slot else 10
+    return 0, int(_upgrade_limit(
+        upgrade_name, is_arcane_slot=is_arcane_slot, key="max_rank", default=default
+    ))
 
 
 def database_max_stacks(
@@ -428,13 +386,6 @@ def database_max_stacks(
     *,
     is_arcane_slot: bool,
 ) -> int | None:
-    kind = "arcane" if is_arcane_slot else "mod"
-    metadata = raw_upgrade_metadata(upgrade_name or "", kind=kind)
-    max_stacks = metadata.get("max_stacks")
-    if max_stacks is None:
-        return None
-    try:
-        max_stacks = int(max_stacks)
-    except (TypeError, ValueError):
-        return None
-    return max_stacks if max_stacks > 0 else None
+    return _upgrade_limit(
+        upgrade_name, is_arcane_slot=is_arcane_slot, key="max_stacks", default=None
+    )

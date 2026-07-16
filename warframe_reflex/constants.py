@@ -212,10 +212,10 @@ SLOT_CONFIGS = (
     {"label": "Mod 2", "kind": "mod", "exilus": False, "options": MOD_FIELD},
     {"label": "Mod 3", "kind": "mod", "exilus": False, "options": MOD_FIELD},
     {"label": "Mod 4", "kind": "mod", "exilus": False, "options": MOD_FIELD},
-    {"label": "Arcane", "kind": "arcane", "exilus": False, "options": ARCANE_FIELD},
     {"label": "Mod 5", "kind": "mod", "exilus": False, "options": MOD_FIELD},
     {"label": "Mod 6", "kind": "mod", "exilus": False, "options": MOD_FIELD},
     {"label": "Mod 7", "kind": "mod", "exilus": False, "options": MOD_FIELD},
     {"label": "Mod 8", "kind": "mod", "exilus": False, "options": MOD_FIELD},
     {"label": "Exilus", "kind": "mod", "exilus": True, "options": MOD_FIELD},
+    {"label": "Arcane", "kind": "arcane", "exilus": False, "options": ARCANE_FIELD},
 )

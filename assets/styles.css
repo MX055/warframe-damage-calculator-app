@@ -287,13 +287,6 @@ body {
   }
 
   /* Keep the eight normal mods first, followed by Exilus and then Arcane. */
-  .slot-grid > :nth-child(5) { order: 10; }
-  .slot-grid > :nth-child(6) { order: 5; }
-  .slot-grid > :nth-child(7) { order: 6; }
-  .slot-grid > :nth-child(8) { order: 7; }
-  .slot-grid > :nth-child(9) { order: 8; }
-  .slot-grid > :nth-child(10) { order: 9; }
-
   .metric-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     grid-template-rows: none;
