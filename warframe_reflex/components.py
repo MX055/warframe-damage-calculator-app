@@ -894,6 +894,8 @@ def external_buffs() -> rx.Component:
 
 
 def upgrades_section() -> rx.Component:
+    # Preserve the familiar card layout without changing the canonical build order.
+    display_order = (0, 1, 2, 3, 9, 4, 5, 6, 7, 8)
     return rx.vstack(
         section_title(
             "Upgrades",
@@ -901,7 +903,7 @@ def upgrades_section() -> rx.Component:
         ),
         rx.box(
             rx.box(
-                *[upgrade_slot(index) for index in range(len(SLOT_CONFIGS))],
+                *[upgrade_slot(index) for index in display_order],
                 class_name="slot-grid",
             ),
             class_name="slot-grid-scroll",

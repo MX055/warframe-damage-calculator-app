@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Iterable
 
-from warframe_damage_calculator import Build, Upgrade
+from warframe_damage_calculator import Upgrade
 from warframe_damage_calculator.models.dist import Dist
 
 from .constants import (
@@ -133,8 +133,8 @@ def upgrade_stat_rows(upgrade: Upgrade) -> list[DisplayRow]:
     rows: list[DisplayRow] = []
 
     def add_stat(field_name: str, value, suffix: str = "") -> None:
-        if field_name == "damage" and isinstance(value, Dist):
-            for damage_type, damage_value in value:
+        if field_name == "damage" and isinstance(value, (Dist, Mapping)):
+            for damage_type, damage_value in Dist(value):
                 if damage_value != 0:
                     rows.append(DisplayRow(field_label(damage_type) + suffix, format_stat_value(damage_value, field_name=damage_type)))
             return
@@ -146,11 +146,14 @@ def upgrade_stat_rows(upgrade: Upgrade) -> list[DisplayRow]:
             if isinstance(raw_effect, Mapping) and "value" in raw_effect:
                 value = raw_effect["value"]
                 condition = raw_effect.get("when")
+                required_rank = raw_effect.get("at_rank")
+                if required_rank is None and isinstance(condition, Mapping):
+                    required_rank = condition.get("rank")
                 suffix = (
-                    f" (rank {condition['rank']})"
-                    if isinstance(condition, Mapping) and "rank" in condition
+                    f" (rank {required_rank})"
+                    if required_rank is not None
                     else f" / stack ({condition})"
-                    if raw_effect.get("stacking")
+                    if raw_effect.get("stacking", raw_effect.get("stacks", False))
                     else f" ({condition})"
                     if condition
                     else ""
@@ -188,7 +191,7 @@ def configured_weapon(
             raise LookupError(f"Could not load weapon: {selected_weapon_name}")
 
     if upgrades:
-        weapon.configure(Build(*upgrades))
+        weapon.configure(*upgrades)
     return weapon
 
 
@@ -235,16 +238,18 @@ def compute_contribution_proportions(
     weapon_type = WEAPON_TYPES[weapon_type_name]
     payload = weapon_payload(weapon_type_name, base_stats)
     full_weapon = weapon_type(payload)
-    full_weapon.configure(Build(*upgrades))
-    total_dps = full_weapon.stats.total_dps
+    full_weapon.configure(*upgrades)
+    total_dps = full_weapon.stats.average.total_dps
     contributions: list[tuple[Upgrade, float]] = []
 
     for index, upgrade in enumerate(upgrades):
         remaining = [item for other_index, item in enumerate(upgrades) if other_index != index]
         comparison_weapon = weapon_type(payload)
         if remaining:
-            comparison_weapon.configure(Build(*remaining))
-        contributions.append((upgrade, total_dps - comparison_weapon.stats.total_dps))
+            comparison_weapon.configure(*remaining)
+        contributions.append(
+            (upgrade, total_dps - comparison_weapon.stats.average.total_dps)
+        )
 
     contribution_total = sum(value for _, value in contributions) or 1.0
     return [(upgrade, value / contribution_total) for upgrade, value in contributions]
@@ -296,24 +301,26 @@ def format_upgrade_contributions(contribution_lookup) -> str:
 
 
 def main_metrics(weapon) -> list[MetricRow]:
+    average = weapon.stats.average
     return [
-        MetricRow("Flat DPH", f"{weapon.stats.flat_dph:,.2f}"),
-        MetricRow("Flat DOTPH", f"{weapon.stats.flat_dotph:,.2f}"),
-        MetricRow("Total DPH", f"{weapon.stats.total_dph:,.2f}"),
-        MetricRow("Flat DPS", f"{weapon.stats.flat_dps:,.2f}"),
-        MetricRow("Flat DOTPS", f"{weapon.stats.flat_dotps:,.2f}"),
-        MetricRow("Total DPS", f"{weapon.stats.total_dps:,.2f}"),
+        MetricRow("Flat DPH", f"{average.flat_dph:,.2f}"),
+        MetricRow("Flat DOTPH", f"{average.flat_dotph:,.2f}"),
+        MetricRow("Total DPH", f"{average.total_dph:,.2f}"),
+        MetricRow("Flat DPS", f"{average.flat_dps:,.2f}"),
+        MetricRow("Flat DOTPS", f"{average.flat_dotps:,.2f}"),
+        MetricRow("Total DPS", f"{average.total_dps:,.2f}"),
     ]
 
 
 def weakpoint_metrics(weapon) -> list[MetricRow]:
+    average = weapon.stats.average
     return [
-        MetricRow("Flat Weakpoint DPH", f"{weapon.stats.flat_weakpoint_dph:,.2f}"),
-        MetricRow("Flat Weakpoint DOTPH", f"{weapon.stats.flat_weakpoint_dotph:,.2f}"),
-        MetricRow("Total Weakpoint DPH", f"{weapon.stats.total_weakpoint_dph:,.2f}"),
-        MetricRow("Flat Weakpoint DPS", f"{weapon.stats.flat_weakpoint_dps:,.2f}"),
-        MetricRow("Flat Weakpoint DOTPS", f"{weapon.stats.flat_weakpoint_dotps:,.2f}"),
-        MetricRow("Total Weakpoint DPS", f"{weapon.stats.total_weakpoint_dps:,.2f}"),
+        MetricRow("Flat Weakpoint DPH", f"{average.flat_weakpoint_dph:,.2f}"),
+        MetricRow("Flat Weakpoint DOTPH", f"{average.flat_weakpoint_dotph:,.2f}"),
+        MetricRow("Total Weakpoint DPH", f"{average.total_weakpoint_dph:,.2f}"),
+        MetricRow("Flat Weakpoint DPS", f"{average.flat_weakpoint_dps:,.2f}"),
+        MetricRow("Flat Weakpoint DOTPS", f"{average.flat_weakpoint_dotps:,.2f}"),
+        MetricRow("Total Weakpoint DPS", f"{average.total_weakpoint_dps:,.2f}"),
     ]
 
 
@@ -323,14 +330,14 @@ def ranged_misc_metrics(weapon) -> list[MetricRow]:
             weapon.stats.effective.damage.weight(damage_type)
             + weapon.stats.effective.explosion_damage.weight(damage_type)
         )
-        * weapon.stats.average_procs_per_shot
+        * weapon.stats.average.procs_per_shot
         for damage_type, _ in (
             weapon.stats.effective.damage
             + weapon.stats.effective.explosion_damage
         )
     )
     return [
-        MetricRow("Average Fire Rate", f"{weapon.stats.average_fire_rate:,.2f}"),
+        MetricRow("Average Fire Rate", f"{weapon.stats.average.fire_rate:,.2f}"),
         MetricRow("Procs / Shot", f"{proc_total:,.2f}"),
     ]
 
@@ -361,7 +368,7 @@ def effective_damage_rows(weapon, *, melee: bool) -> list[DamageResultRow]:
                 f"{weapon.stats.effective.explosion_damage.weight(damage_type):,.2f}"
             ),
             proc_chance=(
-                f"{(weapon.stats.effective.damage.weight(damage_type) + weapon.stats.effective.explosion_damage.weight(damage_type)) * weapon.stats.average_procs_per_shot:.1%}"
+                f"{(weapon.stats.effective.damage.weight(damage_type) + weapon.stats.effective.explosion_damage.weight(damage_type)) * weapon.stats.average.procs_per_shot:.1%}"
             ),
         )
         for damage_type, damage in combined
