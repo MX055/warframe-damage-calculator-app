@@ -76,9 +76,9 @@ def is_field_allowed(field_name: str, weapon_type_name: str, rules: dict) -> boo
 
 def build_upgrade(name: str, values: dict[str, float | int]) -> Upgrade:
     damage_values = {
-        damage_type: float(values.get(damage_type, 0.0))
-        for damage_type in DAMAGE_TYPES
-        if float(values.get(damage_type, 0.0)) != 0
+        field_name: float(value)
+        for field_name, value in values.items()
+        if field_name in DAMAGE_TYPES and float(value) != 0
     }
     scalar_values = {
         field_name: float(values.get(field_name, 0.0))
@@ -145,19 +145,30 @@ def upgrade_stat_rows(upgrade: Upgrade) -> list[DisplayRow]:
         for raw_effect in effects if isinstance(effects, list) else [effects]:
             if isinstance(raw_effect, Mapping) and "value" in raw_effect:
                 value = raw_effect["value"]
-                condition = raw_effect.get("when")
+                stacks_on = raw_effect.get("stacks_on")
+                condition = stacks_on or raw_effect.get("when")
                 required_rank = raw_effect.get("at_rank")
                 if required_rank is None and isinstance(condition, Mapping):
                     required_rank = condition.get("rank")
-                suffix = (
-                    f" (rank {required_rank})"
-                    if required_rank is not None
-                    else f" / stack ({condition})"
-                    if raw_effect.get("stacking", raw_effect.get("stacks", False))
-                    else f" ({condition})"
-                    if condition
-                    else ""
+                qualifiers = []
+                if required_rank is not None:
+                    qualifiers.append(f"rank {required_rank}")
+                elif condition:
+                    qualifiers.append(str(condition))
+                required_upgrade = raw_effect.get("when_equipped")
+                if required_upgrade:
+                    required_names = (
+                        required_upgrade
+                        if isinstance(required_upgrade, list)
+                        else [required_upgrade]
+                    )
+                    qualifiers.append(f"with {', '.join(map(str, required_names))}")
+                stacking = stacks_on is not None or raw_effect.get(
+                    "stacking", raw_effect.get("stacks", False)
                 )
+                suffix = " / stack" if stacking else ""
+                if qualifiers:
+                    suffix += f" ({'; '.join(qualifiers)})"
                 add_stat(field_name, value, suffix)
             else:
                 add_stat(field_name, raw_effect)

@@ -113,9 +113,11 @@ def iter_upgrade_effects(metadata: dict):
     for stat, effects in (stats.items() if isinstance(stats, dict) else ()):
         for effect in effects if isinstance(effects, list) else [effects]:
             if isinstance(effect, dict) and "value" in effect:
-                yield stat, effect["value"], effect.get("when"), bool(
+                stacks_on = effect.get("stacks_on")
+                stacking = stacks_on is not None or bool(
                     effect.get("stacking", effect.get("stacks", False))
                 )
+                yield stat, effect["value"], stacks_on or effect.get("when"), stacking
             else:
                 yield stat, effect, None, False
 
