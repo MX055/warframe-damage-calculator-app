@@ -355,7 +355,7 @@ body {
     grid-template-columns: minmax(0, 1fr) !important;
   }
 
-  .progenitor-grid {
+.progenitor-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
   }
 
@@ -387,6 +387,34 @@ body {
     overflow-wrap: anywhere;
   }
 
+}
+
+.database-entry-input,
+.database-entry-input .rt-TextAreaInput,
+textarea.database-entry-input {
+  font-family: "JetBrains Mono", "Cascadia Code", Consolas, monospace;
+  font-size: 0.75rem !important;
+  line-height: 1.3 !important;
+  tab-size: 2;
+  white-space: pre;
+}
+
+.database-entry-input::placeholder,
+.database-entry-input .rt-TextAreaInput::placeholder,
+textarea.database-entry-input::placeholder {
+  color: var(--gray-9);
+  opacity: 0.62;
+}
+
+.entry-help {
+  color: var(--gray-10);
+  font-size: 0.72rem;
+  text-align: right;
+}
+
+.entry-label {
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 /* Explicit spacing for upgrade-card controls. Reflex theme spacing can be

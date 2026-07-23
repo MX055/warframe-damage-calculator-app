@@ -7,11 +7,12 @@ import reflex as rx
 from .constants import (
     NO_EFFECT,
     PROGENITOR_ELEMENT_OPTIONS,
+    RIVEN_ROLL_OPTIONS,
     SLOT_CONFIGS,
     WEAPON_TYPE_OPTIONS,
 )
 from .models import ContributionRow, DamageResultRow, DisplayRow, EditorField, MetricRow
-from .state import CUSTOM, CalculatorState
+from .state import CUSTOM, RIVEN, CalculatorState
 
 
 def panel(*children, class_name: str = "panel", **props) -> rx.Component:
@@ -312,6 +313,40 @@ def supported_progenitor_controls() -> rx.Component:
     return rx.cond(CalculatorState.supports_progenitor, progenitor_controls())
 
 
+def database_entry_input(
+    label: str,
+    value,
+    on_change,
+    *,
+    placeholder="",
+    help_text: str,
+    min_height: str,
+) -> rx.Component:
+    return rx.vstack(
+        rx.hstack(
+            rx.text(label, class_name="field-label entry-label"),
+            rx.spacer(),
+            rx.text(help_text, class_name="entry-help"),
+            width="100%",
+            align="center",
+        ),
+        rx.text_area(
+            value=value,
+            placeholder=placeholder,
+            on_change=on_change,
+            debounce_timeout=400,
+            width="100%",
+            min_height=min_height,
+            resize="vertical",
+            spell_check=False,
+            class_name="database-entry-input",
+        ),
+        width="100%",
+        gap="2",
+        align="stretch",
+    )
+
+
 def custom_damage_controls() -> rx.Component:
     ranged_tabs = rx.tabs.root(
         rx.tabs.list(
@@ -395,209 +430,18 @@ def custom_damage_controls() -> rx.Component:
 
 
 def custom_base_stats() -> rx.Component:
-    toggle_grid = rx.grid(
-        toggle_control(
-            "Battery Weapon",
-            CalculatorState.is_battery,
-            lambda value: CalculatorState.set_base_toggle("is_battery", value),
-        ),
-        toggle_control(
-            "Charge Weapon",
-            CalculatorState.is_charge_weapon,
-            lambda value: CalculatorState.set_base_toggle("is_charge_weapon", value),
-        ),
-        toggle_control(
-            "Burst Weapon",
-            CalculatorState.is_burst_weapon,
-            lambda value: CalculatorState.set_base_toggle("is_burst_weapon", value),
-        ),
-        toggle_control(
-            "Beam Weapon",
-            CalculatorState.is_beam,
-            lambda value: CalculatorState.set_base_toggle("is_beam", value),
-        ),
-        columns=rx.breakpoints(initial="1", sm="2", lg="4"),
-        gap="3",
-        width="100%",
-        class_name="form-grid form-grid-4",
-    )
-
-    ranged_core = rx.vstack(
-        rx.grid(
-            number_control(
-                "Crit Chance",
-                CalculatorState.base_crit_chance,
-                lambda value: CalculatorState.set_base_number("base_crit_chance", value),
-                minimum=0,
-                maximum=10,
-            ),
-            number_control(
-                "Crit Damage",
-                CalculatorState.base_crit_damage,
-                lambda value: CalculatorState.set_base_number("base_crit_damage", value),
-                minimum=1,
-                maximum=20,
-            ),
-            number_control(
-                "Status Chance",
-                CalculatorState.base_status_chance,
-                lambda value: CalculatorState.set_base_number("base_status_chance", value),
-                minimum=0,
-                maximum=10,
-            ),
-            number_control(
-                "Multishot",
-                CalculatorState.base_multishot,
-                lambda value: CalculatorState.set_base_number("base_multishot", value),
-                minimum=1,
-                maximum=100,
-            ),
-            columns=rx.breakpoints(initial="1", sm="2", lg="4"),
-            gap="4",
-            width="100%",
-            class_name="form-grid form-grid-4",
-        ),
-        rx.grid(
-            number_control(
-                "Fire Rate",
-                CalculatorState.base_fire_rate,
-                lambda value: CalculatorState.set_base_number("base_fire_rate", value),
-                minimum=0.05,
-                maximum=100,
-            ),
-            number_control(
-                "Reload Speed",
-                CalculatorState.base_reload_speed,
-                lambda value: CalculatorState.set_base_number("base_reload_speed", value),
-                minimum=0,
-                maximum=20,
-            ),
-            number_control(
-                "Magazine Capacity",
-                CalculatorState.base_magazine_capacity,
-                lambda value: CalculatorState.set_base_number(
-                    "base_magazine_capacity", value
-                ),
-                minimum=1,
-                maximum=10000,
-                step="1",
-            ),
-            number_control(
-                "Weakpoint Damage",
-                CalculatorState.base_weakpoint_damage,
-                lambda value: CalculatorState.set_base_number(
-                    "base_weakpoint_damage", value
-                ),
-                minimum=1,
-                maximum=20,
-            ),
-            columns=rx.breakpoints(initial="1", sm="2", lg="4"),
-            gap="4",
-            width="100%",
-            class_name="form-grid form-grid-4",
-        ),
-        rx.grid(
-            rx.cond(
-                CalculatorState.is_battery,
-                number_control(
-                    "Recharge Rate",
-                    CalculatorState.base_recharge_rate,
-                    lambda value: CalculatorState.set_base_number(
-                        "base_recharge_rate", value
-                    ),
-                    minimum=0,
-                    maximum=1000,
-                ),
-            ),
-            rx.cond(
-                CalculatorState.is_charge_weapon,
-                number_control(
-                    "Charge Time",
-                    CalculatorState.base_charge_time,
-                    lambda value: CalculatorState.set_base_number(
-                        "base_charge_time", value
-                    ),
-                    minimum=0,
-                    maximum=20,
-                ),
-            ),
-            rx.cond(
-                CalculatorState.is_burst_weapon,
-                number_control(
-                    "Burst Count",
-                    CalculatorState.base_burst_count,
-                    lambda value: CalculatorState.set_base_number(
-                        "base_burst_count", value
-                    ),
-                    minimum=1,
-                    maximum=100,
-                    step="1",
-                ),
-            ),
-            rx.cond(
-                CalculatorState.is_burst_weapon,
-                number_control(
-                    "Burst Delay",
-                    CalculatorState.base_burst_delay,
-                    lambda value: CalculatorState.set_base_number(
-                        "base_burst_delay", value
-                    ),
-                    minimum=0,
-                    maximum=20,
-                ),
-            ),
-            columns=rx.breakpoints(initial="1", sm="2", lg="4"),
-            gap="4",
-            width="100%",
-            class_name="form-grid form-grid-4",
-        ),
-        width="100%",
-        gap="2",
-        class_name="control-row-stack",
-    )
-
-    melee_core = rx.grid(
-        number_control(
-            "Crit Chance",
-            CalculatorState.base_crit_chance,
-            lambda value: CalculatorState.set_base_number("base_crit_chance", value),
-            minimum=0,
-            maximum=10,
-        ),
-        number_control(
-            "Crit Damage",
-            CalculatorState.base_crit_damage,
-            lambda value: CalculatorState.set_base_number("base_crit_damage", value),
-            minimum=1,
-            maximum=20,
-        ),
-        number_control(
-            "Status Chance",
-            CalculatorState.base_status_chance,
-            lambda value: CalculatorState.set_base_number("base_status_chance", value),
-            minimum=0,
-            maximum=10,
-        ),
-        number_control(
-            "Attack Speed",
-            CalculatorState.base_attack_speed,
-            lambda value: CalculatorState.set_base_number("base_attack_speed", value),
-            minimum=0,
-            maximum=20,
-        ),
-        columns=rx.breakpoints(initial="1", sm="2", lg="4"),
-        gap="4",
-        width="100%",
-        class_name="form-grid form-grid-4",
-    )
-
     return rx.vstack(
-        rx.cond(CalculatorState.ranged_weapon, toggle_grid),
-        custom_damage_controls(),
+        database_entry_input(
+            "Custom Weapon Entry",
+            CalculatorState.custom_weapon_entry,
+            CalculatorState.set_custom_weapon_entry,
+            placeholder=CalculatorState.custom_weapon_placeholder,
+            help_text="JSON",
+            min_height="320px",
+        ),
         supported_progenitor_controls(),
-        rx.cond(CalculatorState.ranged_weapon, ranged_core, melee_core),
         width="100%",
-        gap="5",
+        gap="4",
     )
 
 
@@ -623,6 +467,33 @@ def weapon_section() -> rx.Component:
                     gap="4",
                     width="100%",
                     class_name="form-grid form-grid-2",
+                ),
+                rx.cond(
+                    CalculatorState.attack_mode_options.length() > 1,
+                    select_control(
+                        "Attack Mode",
+                        CalculatorState.attack_mode_options,
+                        CalculatorState.selected_attack_mode,
+                        CalculatorState.set_attack_mode,
+                    ),
+                ),
+                rx.cond(
+                    CalculatorState.evolution_options.length() > 0,
+                    rx.grid(
+                        rx.foreach(
+                            CalculatorState.evolution_options,
+                            lambda options, index: select_control(
+                                CalculatorState.evolution_labels[index],
+                                options,
+                                CalculatorState.evolution_selections[index],
+                                lambda value: CalculatorState.set_evolution(index, value),
+                            ),
+                        ),
+                        columns=rx.breakpoints(initial="1", md="2"),
+                        gap="4",
+                        width="100%",
+                        class_name="form-grid form-grid-2",
+                    ),
                 ),
                 rx.cond(
                     CalculatorState.custom_weapon,
@@ -694,7 +565,7 @@ def slot_options(index: int):
     return CalculatorState.slot_upgrade_options[index]
 
 
-def database_slot_body(index: int) -> rx.Component:
+def upgrade_runtime_controls(index: int) -> rx.Component:
     return rx.vstack(
         rx.grid(
             number_control(
@@ -738,6 +609,14 @@ def database_slot_body(index: int) -> rx.Component:
                 class_name="conditional-checkbox-row",
             ),
         ),
+        width="100%",
+        gap="3",
+    )
+
+
+def database_slot_body(index: int) -> rx.Component:
+    return rx.vstack(
+        upgrade_runtime_controls(index),
         rx.separator(width="100%"),
         stat_preview(CalculatorState.slot_stat_rows[index]),
         width="100%",
@@ -746,8 +625,31 @@ def database_slot_body(index: int) -> rx.Component:
 
 
 def custom_slot_body(index: int) -> rx.Component:
+    return rx.vstack(
+        database_entry_input(
+            "Custom Upgrade Entry",
+            CalculatorState.custom_upgrade_entries[index],
+            lambda value: CalculatorState.set_custom_upgrade_entry(index, value),
+            placeholder=CalculatorState.custom_upgrade_placeholders[index],
+            help_text="JSON",
+            min_height="220px",
+        ),
+        rx.separator(width="100%"),
+        stat_preview(CalculatorState.slot_stat_rows[index]),
+        width="100%",
+        gap="3",
+    )
+
+
+def riven_slot_body(index: int) -> rx.Component:
     available = CalculatorState.slot_available_fields[index]
     return rx.vstack(
+        select_control(
+            "Riven Roll",
+            RIVEN_ROLL_OPTIONS,
+            CalculatorState.slot_riven_rolls[index],
+            lambda value: CalculatorState.set_riven_roll(index, value),
+        ),
         rx.grid(
             rx.select(
                 available,
@@ -779,7 +681,7 @@ def custom_slot_body(index: int) -> rx.Component:
                 width="100%",
                 gap="2",
             ),
-            rx.text("No custom stats added.", class_name="empty-text"),
+            rx.text("No Riven stats added.", class_name="empty-text"),
         ),
         rx.separator(width="100%"),
         stat_preview(CalculatorState.slot_stat_rows[index]),
@@ -809,9 +711,13 @@ def upgrade_slot(index: int) -> rx.Component:
                 lambda value: CalculatorState.set_slot_upgrade(index, value),
             ),
             rx.cond(
-                CalculatorState.slot_selected_upgrades[index] != CUSTOM,
-                database_slot_body(index),
+                CalculatorState.slot_selected_upgrades[index] == CUSTOM,
                 custom_slot_body(index),
+                rx.cond(
+                    CalculatorState.slot_selected_upgrades[index] == RIVEN,
+                    riven_slot_body(index),
+                    database_slot_body(index),
+                ),
             ),
             width="100%",
             gap="3",
@@ -974,7 +880,7 @@ def damage_table() -> rx.Component:
                 rx.table.column_header_cell("Damage Type"),
                 rx.table.column_header_cell("Damage"),
                 rx.table.column_header_cell("Direct Hit Weight"),
-                rx.table.column_header_cell("Explosion Weight"),
+                rx.table.column_header_cell("Related Attack Weight"),
                 rx.table.column_header_cell("Proc Chance"),
             )
         ),

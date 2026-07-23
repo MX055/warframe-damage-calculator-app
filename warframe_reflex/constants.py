@@ -34,10 +34,36 @@ DAMAGE_TYPES = (
     "radiation",
     "viral",
     "void",
+    "tau",
+    "true",
 )
 
 DEFAULT_DAMAGE_TYPES = ("impact", "puncture", "slash")
 NO_EFFECT = "None"
+
+RIVEN_ROLL_CONFIGS = {
+    "2 Positive": (2, 0, 0.99, 0.0),
+    "2 Positive + 1 Negative": (2, 1, 1.2375, -0.495),
+    "3 Positive": (3, 0, 0.75, 0.0),
+    "3 Positive + 1 Negative": (3, 1, 0.9375, -0.75),
+}
+
+RIVEN_ROLL_OPTIONS = tuple(RIVEN_ROLL_CONFIGS)
+
+# These are the Riven attributes that affect calculations exposed by this app.
+# The database uses ``damage_bonus`` while the legacy field editor calls it
+# ``base_damage``.
+RIVEN_STAT_ALIASES = {
+    "damage_bonus": "base_damage",
+}
+
+RIVEN_NON_NEGATIVE_STATS = {
+    "cold",
+    "electricity",
+    "heat",
+    "punch_through",
+    "toxin",
+}
 
 PROGENITOR_ELEMENT_OPTIONS = (
     "impact",
@@ -77,7 +103,12 @@ MOD_FIELD: dict[str, tuple[float | int, ...] | None] = {
     "void": (0.0, 1.7263125),
     "base_damage": (-2.55285, 4.2122025),
     "multiplicative_base_damage": (0.0, 14.4),
-    "faction_damage": (-0.523125, 0.86315625),
+    "corpus_damage": (-0.523125, 0.86315625),
+    "grineer_damage": (-0.523125, 0.86315625),
+    "infested_damage": (-0.523125, 0.86315625),
+    "orokin_damage": (-0.523125, 0.86315625),
+    "murmur_damage": (-0.523125, 0.86315625),
+    "sentient_damage": (-0.523125, 0.86315625),
     "weakpoint_damage": (0.0, 3.5),
     "attack_speed": (-1.0357875, 1.70904937),
     "fire_rate": (-1.0357875, 1.70904937),
@@ -128,7 +159,12 @@ BUFF_FIELD: dict[str, tuple[float | int, ...] | None] = {
     "void": (0.0, 9.0),
     "base_damage": (0.0, 9.0),
     "multiplicative_base_damage": (0.0, 9.0),
-    "faction_damage": (0.0, 9.0),
+    "corpus_damage": (0.0, 9.0),
+    "grineer_damage": (0.0, 9.0),
+    "infested_damage": (0.0, 9.0),
+    "orokin_damage": (0.0, 9.0),
+    "murmur_damage": (0.0, 9.0),
+    "sentient_damage": (0.0, 9.0),
     "weakpoint_damage": (0.0, 9.0),
     "attack_speed": (0.0, 9.0),
     "multiplicative_fire_rate": (0.0, 9.0),
@@ -172,7 +208,12 @@ FIELD_WEAPON_RULES = {
 
 UPGRADE_SCALAR_FIELDS = (
     "base_damage",
-    "faction_damage",
+    "corpus_damage",
+    "grineer_damage",
+    "infested_damage",
+    "orokin_damage",
+    "murmur_damage",
+    "sentient_damage",
     "crit_chance",
     "crit_damage",
     "status_chance",
