@@ -144,6 +144,7 @@ def _custom_weapon_template(
         "name": "Custom Weapon",
         "type": weapon_type_name.casefold(),
         "subtype": weapon_category.casefold(),
+        "progenitor": True,
         "attacks": {
             "normal_attack": {
                 "trigger": "melee" if melee else "semi",
@@ -179,21 +180,7 @@ def _custom_weapon_template(
         entry["ammo"] = {
             "reload_time": 2.0,
             "magazine_size": 30,
-            "is_progenitor": True,
-        }
-        entry["evolutions"] = {
-            "2": {
-                "1": {
-                    "description": "Example: +20 base damage",
-                    "stats": {"damage": [{"value": 20, "mode": "base"}]},
-                },
-                "2": {
-                    "description": "Example: +25% fire rate",
-                    "stats": {
-                        "fire_rate": [{"value": 0.25, "mode": "additive"}]
-                    },
-                },
-            }
+            "recharge_rate": 10.0,
         }
     return json.dumps(entry, indent=2)
 
@@ -204,19 +191,10 @@ def _custom_upgrade_templates(
 ) -> list[str]:
     entries = []
     for config in SLOT_CONFIGS:
-        compatibility = {
-            "types": [weapon_type_name.casefold()],
-            "subtypes": [weapon_category.casefold()],
-            "exilus": False,
-        }
-        if config["exilus"]:
-            compatibility["exilus"] = True
         entry = {
             "name": f"Custom {config['label']}",
             "type": config["kind"],
             "max_rank": 10 if config["kind"] == "mod" else 5,
-            "compatibility": compatibility,
-            "incompatibility": ["Example Incompatible Upgrade"],
             "stats": {
                 "damage_bonus": [
                     {"value": 1.65, "mode": "additive"},
@@ -241,6 +219,8 @@ def _custom_upgrade_templates(
                 "on_headshot": True,
             },
         }
+        if config["exilus"]:
+            entry["compatibility"] = {"exilus": True}
         entries.append(json.dumps(entry, indent=2))
     return entries
 
@@ -256,8 +236,6 @@ def _empty_custom_upgrade_entry(index: int) -> str:
             "name": config["label"],
             "type": config["kind"],
             "max_rank": 0,
-            "compatibility": {"exilus": bool(config["exilus"])},
-            "incompatibility": [],
             "stats": {},
         }
     )
@@ -818,14 +796,17 @@ class CalculatorState(rx.State):
 
     def _refresh_weapon_features(self):
         if self.custom_weapon:
-            try:
-                metadata = parse_database_entry(
-                    self.custom_weapon_entry or self.custom_weapon_placeholder,
-                    default_name="Custom Weapon",
-                    default_type=self.selected_weapon_type.casefold(),
-                )
-            except ValueError:
+            if not self.custom_weapon_entry.strip():
                 metadata = {}
+            else:
+                try:
+                    metadata = parse_database_entry(
+                        self.custom_weapon_entry,
+                        default_name="Custom Weapon",
+                        default_type=self.selected_weapon_type.casefold(),
+                    )
+                except ValueError:
+                    metadata = {}
             attacks = metadata.get("attacks") or {}
             child_names = {
                 child
@@ -1019,9 +1000,11 @@ class CalculatorState(rx.State):
                 self.selected_weapon_type,
                 self.selected_weapon,
             )
+        if not self.custom_weapon_entry.strip():
+            return {}
         try:
             return parse_database_entry(
-                self.custom_weapon_entry or self.custom_weapon_placeholder,
+                self.custom_weapon_entry,
                 default_name="Custom Weapon",
                 default_type=self.selected_weapon_type.casefold(),
             )
@@ -1369,6 +1352,9 @@ class CalculatorState(rx.State):
 
     def _recalculate(self):
         try:
+            if self.custom_weapon and not self.custom_weapon_entry.strip():
+                raise ValueError("Custom Weapon JSON is required.")
+
             slot_upgrades = [
                 self._slot_upgrade(index) for index in range(len(SLOT_CONFIGS))
             ]
@@ -1418,11 +1404,7 @@ class CalculatorState(rx.State):
                 custom_weapon=self.custom_weapon,
                 base_stats={},
                 upgrades=upgrades,
-                custom_entry=(
-                    self.custom_weapon_entry or self.custom_weapon_placeholder
-                )
-                if self.custom_weapon
-                else None,
+                custom_entry=self.custom_weapon_entry if self.custom_weapon else None,
                 selected_mode=self.selected_attack_mode or None,
                 evolutions=evolutions,
             )
