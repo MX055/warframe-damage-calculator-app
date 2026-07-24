@@ -6,7 +6,7 @@ from typing import Any
 
 import reflex as rx
 from warframe_damage_calculator import Upgrade
-from warframe_damage_calculator.models.dist import Dist
+from warframe_damage_calculator.core.dist import Dist
 
 from .constants import (
     ARCANE_FIELD,

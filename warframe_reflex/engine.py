@@ -5,7 +5,7 @@ from collections.abc import Mapping
 from typing import Iterable
 
 from warframe_damage_calculator import Build, Upgrade
-from warframe_damage_calculator.models.dist import Dist
+from warframe_damage_calculator.core.dist import Dist
 
 from .constants import (
     DAMAGE_TYPES,
@@ -392,10 +392,10 @@ def configured_weapon(
         if weapon is None:
             raise LookupError(f"Could not load weapon: {selected_weapon_name}")
 
-    attack = None
+    context: dict[str, object] = {}
     if selected_mode:
         wanted = "_".join(selected_mode.casefold().replace("-", " ").split())
-        attack = next(
+        context["attack"] = next(
             (
                 name
                 for name in weapon.data.attacks
@@ -403,7 +403,9 @@ def configured_weapon(
             ),
             selected_mode,
         )
-    weapon.configure(Build(*upgrades), attack=attack, evolutions=evolutions)
+    if evolutions:
+        context["evolutions"] = evolutions
+    weapon.configure(Build(*upgrades), context=context or None)
     return weapon
 
 
@@ -474,6 +476,7 @@ def contribution_lookup_for_weapon(
     upgrades: list[Upgrade],
 ):
     for attribute_name in (
+        "shapley_contributions",
         "contribution_proportions",
         "upgrade_contribution_proportions",
         "contributions_proportions",
@@ -483,6 +486,14 @@ def contribution_lookup_for_weapon(
             return contribution_items(value() if callable(value) else value)
         except (AttributeError, TypeError):
             pass
+
+    try:
+        removal = getattr(weapon.results, "removal_contributions")
+        items = contribution_items(removal() if callable(removal) else removal)
+        total = sum(value for _, value in items) or 1.0
+        return [(key, value / total) for key, value in items]
+    except (AttributeError, TypeError):
+        pass
 
     if base_stats is None:
         return []
