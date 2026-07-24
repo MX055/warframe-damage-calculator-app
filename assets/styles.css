@@ -430,6 +430,59 @@ textarea.database-entry-input::placeholder {
   min-width: 0;
 }
 
+.slot-editor-shell {
+  position: relative;
+  width: 100%;
+}
+
+.slot-editor-toggle-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+  opacity: 0;
+}
+
+.slot-editor-summary {
+  width: 100%;
+  cursor: pointer;
+  user-select: none;
+}
+
+.slot-editor-toggle-input:focus-visible + .slot-editor-summary {
+  border-radius: 8px;
+  outline: 2px solid rgba(255, 255, 255, 0.24);
+  outline-offset: 4px;
+}
+
+.slot-editor-slot-label {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.slot-editor-upgrade-name {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.slot-editor-controls {
+  display: none !important;
+  margin-top: 0.85rem;
+  padding-top: 0.85rem;
+  border-top: 1px solid var(--border);
+}
+
+.slot-editor-toggle-input:checked ~ .slot-editor-controls {
+  display: flex !important;
+}
+
 
 /* Uniform spacing for all form grids. Explicit CSS is used because the
    Reflex gap prop can be overridden by generated responsive grid styles. */
@@ -501,14 +554,14 @@ textarea.database-entry-input::placeholder {
 .optimizer-menu {
   width: 100%;
   overflow: hidden;
-  border: 1px solid var(--border);
+  border: 1px solid var(--border) !important;
   border-radius: 14px;
-  background: var(--panel-bg);
-  box-shadow: var(--shadow);
+  background: var(--panel-bg) !important;
+  box-shadow: var(--shadow) !important;
 }
 
 .optimizer-menu:focus-within {
-  border-color: var(--border-strong);
+  border-color: rgba(255, 255, 255, 0.22);
 }
 
 .optimizer-menu [data-radix-collection-item] {

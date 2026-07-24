@@ -623,8 +623,6 @@ def upgrade_runtime_controls(index: int) -> rx.Component:
 def database_slot_body(index: int) -> rx.Component:
     return rx.vstack(
         upgrade_runtime_controls(index),
-        rx.separator(width="100%"),
-        stat_preview(CalculatorState.slot_stat_rows[index]),
         width="100%",
         gap="3",
     )
@@ -640,8 +638,6 @@ def custom_slot_body(index: int) -> rx.Component:
             help_text="JSON",
             min_height="220px",
         ),
-        rx.separator(width="100%"),
-        stat_preview(CalculatorState.slot_stat_rows[index]),
         width="100%",
         gap="3",
     )
@@ -689,8 +685,6 @@ def riven_slot_body(index: int) -> rx.Component:
             ),
             rx.text("No Riven stats added.", class_name="empty-text"),
         ),
-        rx.separator(width="100%"),
-        stat_preview(CalculatorState.slot_stat_rows[index]),
         width="100%",
         gap="3",
     )
@@ -698,40 +692,55 @@ def riven_slot_body(index: int) -> rx.Component:
 
 def upgrade_slot(index: int) -> rx.Component:
     config = SLOT_CONFIGS[index]
+    toggle_id = f"slot-editor-toggle-{index}"
     return panel(
-        rx.vstack(
-            rx.hstack(
-                rx.text(config["label"], class_name="card-title"),
-                rx.spacer(),
-                rx.badge(
-                    CalculatorState.slot_contributions[index],
-                    variant="soft",
-                    class_name="contribution-badge",
+        rx.box(
+            rx.el.input(type="checkbox", id=toggle_id, checked=CalculatorState.slot_editor_open[index], on_change=lambda value: CalculatorState.set_slot_editor_open(index, value), class_name="slot-editor-toggle-input"),
+            rx.el.label(
+                rx.vstack(
+                    rx.hstack(
+                        rx.vstack(
+                            rx.text(config["label"], class_name="slot-editor-slot-label"),
+                            rx.text(CalculatorState.slot_selected_upgrades[index], class_name="card-title slot-editor-upgrade-name"),
+                            align="start",
+                            gap="1",
+                            min_width="0",
+                        ),
+                        rx.spacer(),
+                        rx.badge(CalculatorState.slot_contributions[index], variant="soft", class_name="contribution-badge"),
+                        width="100%",
+                        align="center",
+                    ),
+                    stat_preview(CalculatorState.slot_stat_rows[index]),
+                    width="100%",
+                    gap="3",
+                    align="start",
                 ),
-                width="100%",
-                align="center",
+                html_for=toggle_id,
+                class_name="slot-editor-summary",
             ),
-            select_input(
-                slot_options(index),
-                CalculatorState.slot_selected_upgrades[index],
-                lambda value: CalculatorState.set_slot_upgrade(index, value),
-            ),
-            rx.cond(
-                CalculatorState.slot_selected_upgrades[index] == NONE,
-                rx.text("Empty slot.", class_name="empty-text"),
+            rx.vstack(
+                select_input(slot_options(index), CalculatorState.slot_selected_upgrades[index], lambda value: CalculatorState.set_slot_upgrade(index, value)),
                 rx.cond(
-                    CalculatorState.slot_selected_upgrades[index] == CUSTOM,
-                    custom_slot_body(index),
+                    CalculatorState.slot_selected_upgrades[index] == NONE,
+                    rx.text("Select an upgrade to edit its settings.", class_name="empty-text"),
                     rx.cond(
-                        CalculatorState.slot_selected_upgrades[index] == RIVEN,
-                        riven_slot_body(index),
-                        database_slot_body(index),
+                        CalculatorState.slot_selected_upgrades[index] == CUSTOM,
+                        custom_slot_body(index),
+                        rx.cond(
+                            CalculatorState.slot_selected_upgrades[index] == RIVEN,
+                            riven_slot_body(index),
+                            database_slot_body(index),
+                        ),
                     ),
                 ),
+                width="100%",
+                gap="3",
+                align="start",
+                class_name="slot-editor-controls",
             ),
             width="100%",
-            gap="3",
-            align="start",
+            class_name="slot-editor-shell",
         ),
         class_name="slot-card",
     )
@@ -963,7 +972,6 @@ def optimizer_run_controls() -> rx.Component:
 
 def optimizer_section() -> rx.Component:
     return rx.vstack(
-        section_title("Optimize", "Set build rules and exclusions, then search legal upgrades for higher total DPS."),
         rx.accordion.root(
             rx.accordion.item(
                 header=rx.hstack(
@@ -1037,6 +1045,8 @@ def optimizer_section() -> rx.Component:
             type="single",
             collapsible=True,
             default_value="optimizer-menu",
+            color_scheme="gray",
+            variant="surface",
             width="100%",
             class_name="optimizer-menu",
         ),

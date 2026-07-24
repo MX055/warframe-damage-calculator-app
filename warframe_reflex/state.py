@@ -357,6 +357,7 @@ class CalculatorState(rx.State):
     slot_contributions: list[str] = rx.field(
         default_factory=lambda: ["—" for _ in SLOT_CONFIGS]
     )
+    slot_editor_open: list[bool] = rx.field(default_factory=lambda: [False for _ in SLOT_CONFIGS])
     optimize_find_riven: bool = False
     optimize_status: str = ""
     optimize_running: bool = False
@@ -584,6 +585,14 @@ class CalculatorState(rx.State):
         self._recalculate()
 
     @rx.event
+    def set_slot_editor_open(self, index: int, value: bool):
+        if not 0 <= index < len(SLOT_CONFIGS):
+            return
+        open_editors = list(self.slot_editor_open)
+        open_editors[index] = bool(value)
+        self.slot_editor_open = open_editors
+
+    @rx.event
     def set_slot_upgrade(self, index: int, value: str):
         if not 0 <= index < len(SLOT_CONFIGS):
             return
@@ -740,7 +749,7 @@ class CalculatorState(rx.State):
             if self.selected_weapon == NONE or self.optimize_running:
                 return
             self.optimize_running = True
-            self.optimize_status = "Optimizing…"
+            self.optimize_status = ""
             self.optimize_phase = "Starting…"
             self.optimize_progress = 0.0
             self.optimize_progress_width = "0%"
@@ -826,7 +835,6 @@ class CalculatorState(rx.State):
                         self.optimize_progress = float(fraction) * 100.0
                         self.optimize_progress_width = f"{self.optimize_progress:.1f}%"
                         self.optimize_evaluations = int(evaluations)
-                        self.optimize_status = f"{phase} · {evaluations} evals"
                         if best_dps is not None:
                             self.optimize_best_dps = f"{best_dps:,.2f}"
                 elif msg[0] == "done":

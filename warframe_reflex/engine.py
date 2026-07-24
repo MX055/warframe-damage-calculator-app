@@ -228,8 +228,12 @@ def format_stat_value(
         return str(int(value))
 
     flat_units = {
+        "afflictions_proc_multiplier": "",
+        "cascadia_empowered_proc": "",
         "combo_duration": "s",
+        "explosion_radius": "m",
         "initial_combo": "",
+        "overguard_damage_multiplier": "",
         "punch_through": "m",
         "range": "m",
     }
@@ -238,9 +242,7 @@ def format_stat_value(
         formatted = f"{float(value):,.3f}".rstrip("0").rstrip(".")
         return f"{formatted} {unit}".rstrip()
 
-    if isinstance(value, int):
-        return str(value)
-    return f"{value:,.1%}"
+    return f"{float(value):,.1%}"
 
 
 def upgrade_stat_rows(
@@ -291,8 +293,12 @@ def upgrade_stat_rows(
                 add_stat(field_name, raw_effect)
 
     flat_units = {
+        "afflictions_proc_multiplier": "",
+        "cascadia_empowered_proc": "",
         "combo_duration": "s",
+        "explosion_radius": "m",
         "initial_combo": "",
+        "overguard_damage_multiplier": "",
         "punch_through": "m",
         "range": "m",
     }
