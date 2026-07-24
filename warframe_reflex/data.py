@@ -16,6 +16,19 @@ AUTOMATIC_CONDITIONS = {
     "melee", "sacrificial set",
 }
 
+FACTION_DAMAGE_STATS = {"corpus damage", "corrupted damage", "grineer damage", "infested damage", "murmur damage", "narmer damage", "orokin damage", "sentient damage"}
+
+EXTERNAL_ACTIVATION_UPGRADES_WITHOUT_DATABASE_CONDITIONS = {"Melee Careen", "Melee Retaliation", "Secondary Kinship", "Secondary Surge"}
+
+WEAPON_ACTIVATED_CONDITIONS = {
+    "cold proc", "cold status effect", "consecutive throw", "downed enemy", "each tendril active", "health drain", "hit", "kill", "no enemies within 10m",
+    "on 2 hits within 0 02s", "on 2 hits within 0 2s", "on 4 hits within 0 05s", "on 5 pellet headshot", "on alt fire", "on cold status effect",
+    "on combined status at 10 stacks", "on critical hit", "on damaging enemies with heat", "on direct hit", "on electricity status effect", "on full charge",
+    "on headshot", "on headshot kill", "on headshot kill on eximus", "on heat status effect", "on hit", "on kill", "on orb strike", "on proc", "on pull",
+    "on reload", "on status effect", "on toxin status effect", "on weak point hits with primary fire", "stacks", "status type", "target 15m", "weak point hit",
+    "weak point kill",
+}
+
 
 def type_query_for_weapon_type(weapon_type_name: str) -> str:
     return {"Primary": "primary", "Secondary": "secondary", "Melee": "melee"}[weapon_type_name]
@@ -23,6 +36,10 @@ def type_query_for_weapon_type(weapon_type_name: str) -> str:
 
 def normalized_database_key(value: object) -> str:
     return " ".join(str(value or "").casefold().replace("_", " ").replace("-", " ").split())
+
+
+def is_faction_damage_stat(stat_name: str) -> bool:
+    return normalized_database_key(stat_name) in FACTION_DAMAGE_STATS
 
 
 @lru_cache(maxsize=1)
@@ -56,7 +73,7 @@ def raw_riven_stats_database() -> dict:
 
 
 def raw_weapon_metadata(_weapon_type_name: str, weapon_name: str | None) -> dict:
-    if not weapon_name or normalized_database_key(weapon_name) == "custom":
+    if not weapon_name or normalized_database_key(weapon_name) in {"custom", "none"}:
         return {}
     return raw_weapons_database().get(weapon_name, {}) or {}
 
@@ -86,6 +103,18 @@ def upgrade_conditions(metadata: dict, *, include_stacking: bool = True) -> list
         for _stat, _value, condition, stacking in iter_upgrade_effects(metadata)
         if isinstance(condition, str) and (include_stacking or not stacking)
     ]
+
+
+@lru_cache(maxsize=None)
+def optimizer_excludes_upgrade_by_default(upgrade_name: str) -> bool:
+    if upgrade_name in EXTERNAL_ACTIVATION_UPGRADES_WITHOUT_DATABASE_CONDITIONS:
+        return True
+    metadata = raw_upgrade_metadata(upgrade_name)
+    stats = {normalized_database_key(stat) for stat in (metadata.get("stats") or {})}
+    if stats and stats <= FACTION_DAMAGE_STATS:
+        return True
+    conditions = {normalized_database_key(condition) for condition in upgrade_conditions(metadata) if normalized_database_key(condition) not in AUTOMATIC_CONDITIONS}
+    return any(condition not in WEAPON_ACTIVATED_CONDITIONS for condition in conditions)
 
 
 def database_conditional_info(upgrade_name: str | None, *, is_arcane_slot: bool) -> tuple[bool, str]:
@@ -134,9 +163,20 @@ def _selected_attack(metadata: dict, selected_mode: str | None) -> dict:
     return next(iter(attacks.values()), {})
 
 
+def selected_attack_trigger(selected_weapon_name: str | None, selected_mode: str | None, *, custom_metadata: dict | None = None) -> str | None:
+    metadata = custom_metadata if custom_metadata is not None else raw_weapon_metadata("", selected_weapon_name)
+    trigger = _selected_attack(metadata, selected_mode).get("trigger")
+    return normalized_database_key(trigger) if trigger else None
+
+
+def selected_attack_is_aoe(selected_weapon_name: str | None, selected_mode: str | None, *, custom_metadata: dict | None = None) -> bool:
+    metadata = custom_metadata if custom_metadata is not None else raw_weapon_metadata("", selected_weapon_name)
+    return bool(_selected_attack(metadata, selected_mode).get("aoe", False))
+
+
 def weapon_compatibility_terms(weapon_category: str, selected_weapon_name: str | None = None) -> set[str]:
     terms = set(WEAPON_COMPATIBILITY_FAMILIES[weapon_category])
-    if selected_weapon_name and normalized_database_key(selected_weapon_name) != "custom":
+    if selected_weapon_name and normalized_database_key(selected_weapon_name) not in {"custom", "none"}:
         metadata = raw_weapon_metadata(WEAPON_CATEGORY_TYPES[weapon_category], selected_weapon_name)
         terms.add(normalized_database_key(selected_weapon_name))
         for value in (metadata.get("type"), metadata.get("subtype")):
@@ -145,7 +185,23 @@ def weapon_compatibility_terms(weapon_category: str, selected_weapon_name: str |
     return terms
 
 
-def upgrade_matches_weapon_type(metadata: dict, weapon_category: str, *, selected_weapon_name: str | None = None, selected_mode: str | None = None) -> bool:
+def upgrade_incompatibility_names(metadata: dict) -> set[str]:
+    return {str(name) for name in (metadata.get("incompatibility") or []) if name}
+
+
+def upgrades_are_incompatible(left_name: str, right_name: str) -> bool:
+    if not left_name or not right_name or left_name == right_name:
+        return False
+    left = raw_upgrade_metadata(left_name)
+    right = raw_upgrade_metadata(right_name)
+    return right_name in upgrade_incompatibility_names(left) or left_name in upgrade_incompatibility_names(right)
+
+
+def upgrade_conflicts_with_selected(upgrade_name: str, selected_names: set[str]) -> bool:
+    return any(upgrades_are_incompatible(upgrade_name, other) for other in selected_names if other != upgrade_name)
+
+
+def upgrade_matches_weapon_type(metadata: dict, weapon_category: str, *, selected_weapon_name: str | None = None, selected_mode: str | None = None, custom_metadata: dict | None = None) -> bool:
     compatibility = metadata.get("compatibility") or {}
     allowed = {
         normalized_database_key(item)
@@ -154,11 +210,29 @@ def upgrade_matches_weapon_type(metadata: dict, weapon_category: str, *, selecte
     }
     if allowed and not (allowed & weapon_compatibility_terms(weapon_category, selected_weapon_name)):
         return False
-    if "aoe" in compatibility and selected_weapon_name:
-        is_aoe = bool(_selected_attack(raw_weapon_metadata("", selected_weapon_name), selected_mode).get("aoe", False))
+    has_aoe_rule = "aoe" in compatibility
+    has_trigger_rule = bool(compatibility.get("triggers"))
+    if has_aoe_rule:
+        is_aoe = selected_attack_is_aoe(selected_weapon_name, selected_mode, custom_metadata=custom_metadata)
         if bool(compatibility["aoe"]) != is_aoe:
             return False
-    return bool(allowed or "aoe" in compatibility)
+    if has_trigger_rule:
+        trigger = selected_attack_trigger(selected_weapon_name, selected_mode, custom_metadata=custom_metadata)
+        allowed_triggers = {normalized_database_key(item) for item in compatibility.get("triggers", [])}
+        if trigger is None or trigger not in allowed_triggers:
+            return False
+    return bool(allowed or has_aoe_rule or has_trigger_rule)
+
+
+def arcane_matches_weapon_slot(name: str, weapon_category: str) -> bool:
+    """Filter weapon-slot Arcanes without trusting the database's broad primary tag."""
+    if weapon_category in {"Rifle", "Shotgun", "Bow", "Sniper"}:
+        return name.startswith("Primary ") or name == "Fractalized Reset" or (weapon_category == "Bow" and name == "Longbow Sharpshot") or (weapon_category == "Shotgun" and name == "Shotgun Vendetta")
+    if weapon_category == "Pistol":
+        return name.startswith(("Secondary ", "Cascadia ")) or name in {"Akimbo Slip Shot", "Conjunction Voltage"}
+    if weapon_category == "Melee":
+        return name.startswith("Melee ")
+    return False
 
 
 @lru_cache(maxsize=None)
@@ -183,7 +257,8 @@ def upgrade_names_for_ui(weapon_category: str, selected_weapon_name: str | None,
         is_exilus = bool((metadata.get("compatibility") or {}).get("exilus", False))
         if kind == "mod" and exilus_only and not is_exilus:
             continue
-        if upgrade_matches_weapon_type(metadata, weapon_category, selected_weapon_name=selected_weapon_name, selected_mode=selected_mode):
+        matches_weapon = arcane_matches_weapon_slot(name, weapon_category) if kind == "arcane" else upgrade_matches_weapon_type(metadata, weapon_category, selected_weapon_name=selected_weapon_name, selected_mode=selected_mode)
+        if matches_weapon:
             names.append(name)
     return tuple(sorted(names, key=str.casefold))
 

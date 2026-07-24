@@ -21,6 +21,10 @@ from .constants import (
     RIVEN_ROLL_OPTIONS,
     RIVEN_STAT_ALIASES,
     SLOT_CONFIGS,
+    SLOT_POLICY_DISCARD,
+    SLOT_POLICY_KEEP,
+    SLOT_POLICY_KEEP_IN_SLOT,
+    SLOT_POLICY_OPTIONS,
     WEAPON_CATEGORY_TYPES,
     UPGRADE_BOOL_FIELDS,
     UPGRADE_SCALAR_FIELDS,
@@ -30,14 +34,18 @@ from .data import (
     database_max_stacks,
     database_rank_bounds,
     database_upgrade,
+    is_faction_damage_stat,
+    optimizer_excludes_upgrade_by_default,
     raw_riven_stats_database,
     raw_upgrade_metadata,
     raw_weapon_metadata,
+    upgrade_conflicts_with_selected,
     upgrade_names_for_ui,
     weapon_attack_modes,
     weapon_evolution_options,
     weapon_names_for_type,
 )
+from .optimizer import OptimizeRequest, SlotSpec, optimize_build as run_optimize_build
 from .engine import (
     build_upgrade,
     clamp_number,
@@ -70,6 +78,7 @@ from .models import (
     MetricRow,
 )
 
+NONE = "None"
 CUSTOM = "Custom"
 RIVEN = "Riven"
 
@@ -251,19 +260,19 @@ class CalculatorState(rx.State):
     initialized: bool = False
     selected_weapon_type: str = "Primary"
     selected_weapon_category: str = "Rifle"
-    selected_weapon: str = CUSTOM
+    selected_weapon: str = NONE
 
-    weapon_options: list[str] = rx.field(default_factory=lambda: [CUSTOM])
+    weapon_options: list[str] = rx.field(default_factory=lambda: [NONE])
     attack_mode_options: list[str] = rx.field(default_factory=list)
     selected_attack_mode: str = ""
     evolution_labels: list[str] = rx.field(default_factory=list)
     evolution_options: list[list[str]] = rx.field(default_factory=list)
     evolution_selections: list[str] = rx.field(default_factory=list)
-    mod_options: list[str] = rx.field(default_factory=lambda: [CUSTOM])
-    exilus_options: list[str] = rx.field(default_factory=lambda: [CUSTOM])
-    arcane_options: list[str] = rx.field(default_factory=lambda: [CUSTOM])
+    mod_options: list[str] = rx.field(default_factory=lambda: [NONE])
+    exilus_options: list[str] = rx.field(default_factory=lambda: [NONE])
+    arcane_options: list[str] = rx.field(default_factory=lambda: [NONE])
     slot_upgrade_options: list[list[str]] = rx.field(
-        default_factory=lambda: [[CUSTOM] for _ in SLOT_CONFIGS]
+        default_factory=lambda: [[NONE] for _ in SLOT_CONFIGS]
     )
     custom_weapon_entry: str = ""
     custom_weapon_placeholder: str = rx.field(default_factory=_custom_weapon_template)
@@ -314,9 +323,12 @@ class CalculatorState(rx.State):
     explosion_forced_proc_pending: str = ""
 
     slot_selected_upgrades: list[str] = rx.field(
-        default_factory=lambda: [CUSTOM for _ in SLOT_CONFIGS]
+        default_factory=lambda: [NONE for _ in SLOT_CONFIGS]
     )
-    slot_ranks: list[int] = rx.field(default_factory=lambda: _default_slot_max_ranks())
+    slot_policies: list[str] = rx.field(
+        default_factory=lambda: [SLOT_POLICY_DISCARD for _ in SLOT_CONFIGS]
+    )
+    slot_ranks: list[int] = rx.field(default_factory=lambda: [0 for _ in SLOT_CONFIGS])
     slot_max_ranks: list[int] = rx.field(default_factory=_default_slot_max_ranks)
     slot_stacks: list[int] = rx.field(default_factory=lambda: [0 for _ in SLOT_CONFIGS])
     slot_max_stacks: list[int] = rx.field(
@@ -345,6 +357,22 @@ class CalculatorState(rx.State):
     slot_contributions: list[str] = rx.field(
         default_factory=lambda: ["—" for _ in SLOT_CONFIGS]
     )
+    optimize_find_riven: bool = False
+    optimize_status: str = ""
+    optimize_running: bool = False
+    optimize_best_dps: str = ""
+    optimize_progress: float = 0.0
+    optimize_progress_width: str = "0%"
+    optimize_phase: str = ""
+    optimize_evaluations: int = 0
+    optimize_excluded_upgrades: list[str] = rx.field(default_factory=list)
+    optimize_default_exclusion_overrides: list[str] = rx.field(default_factory=list)
+    optimize_upgrade_exclusion_options: list[str] = rx.field(default_factory=list)
+    optimize_pending_excluded_upgrade: str = ""
+    optimize_excluded_riven_stats: list[str] = rx.field(default_factory=list)
+    optimize_default_riven_exclusion_overrides: list[str] = rx.field(default_factory=list)
+    optimize_riven_stat_exclusion_options: list[str] = rx.field(default_factory=list)
+    optimize_pending_excluded_riven_stat: str = ""
 
     external_fields: list[EditorField] = rx.field(default_factory=list)
     external_available_fields: list[str] = rx.field(default_factory=list)
@@ -364,6 +392,21 @@ class CalculatorState(rx.State):
     @rx.var
     def custom_weapon(self) -> bool:
         return self.selected_weapon == CUSTOM
+
+    @rx.var
+    def no_weapon(self) -> bool:
+        return self.selected_weapon == NONE
+
+    @rx.var
+    def optimizer_enabled(self) -> bool:
+        return self.selected_weapon != NONE
+
+    @rx.var
+    def riven_optimize_disabled(self) -> bool:
+        return any(
+            selected == RIVEN and policy in {SLOT_POLICY_KEEP, SLOT_POLICY_KEEP_IN_SLOT}
+            for selected, policy in zip(self.slot_selected_upgrades, self.slot_policies)
+        )
 
     @rx.var
     def ranged_weapon(self) -> bool:
@@ -400,7 +443,7 @@ class CalculatorState(rx.State):
             return
         self.selected_weapon_category = value
         self.selected_weapon_type = WEAPON_CATEGORY_TYPES[value]
-        self.selected_weapon = CUSTOM
+        self.selected_weapon = NONE
         self.custom_weapon_entry = ""
         self.custom_weapon_placeholder = _custom_weapon_template(
             self.selected_weapon_type,
@@ -425,7 +468,7 @@ class CalculatorState(rx.State):
 
     @rx.event
     def set_weapon(self, value: str):
-        self.selected_weapon = value if value in self.weapon_options else CUSTOM
+        self.selected_weapon = value if value in self.weapon_options else NONE
         self._refresh_weapon_features()
         self._refresh_upgrade_options()
         self._refresh_all_riven_field_limits()
@@ -551,6 +594,18 @@ class CalculatorState(rx.State):
         selected[index] = value
         self.slot_selected_upgrades = selected
 
+        policies = list(self.slot_policies)
+        if value == NONE:
+            self._clear_slot(index, reset_policy=True)
+            self._refresh_slot_upgrade_options()
+            self._refresh_slot_condition_metadata()
+            self._refresh_slot_field_options()
+            self._recalculate()
+            return
+        if previous == NONE or value in self.optimize_excluded_upgrades:
+            policies[index] = SLOT_POLICY_DISCARD
+            self.slot_policies = policies
+
         max_ranks = list(self.slot_max_ranks)
         ranks = list(self.slot_ranks)
         max_stacks = list(self.slot_max_stacks)
@@ -591,6 +646,222 @@ class CalculatorState(rx.State):
         self._refresh_slot_condition_metadata()
         self._refresh_slot_field_options()
         self._recalculate()
+
+    @rx.event
+    def set_slot_policy(self, index: int, value: str):
+        if not 0 <= index < len(SLOT_CONFIGS) or value not in SLOT_POLICY_OPTIONS:
+            return
+        policies = list(self.slot_policies)
+        policies[index] = value
+        self.slot_policies = policies
+        selected = self.slot_selected_upgrades[index]
+        if value in {SLOT_POLICY_KEEP, SLOT_POLICY_KEEP_IN_SLOT} and selected in self.optimize_excluded_upgrades:
+            if optimizer_excludes_upgrade_by_default(selected) and selected not in self.optimize_default_exclusion_overrides:
+                self.optimize_default_exclusion_overrides = [*self.optimize_default_exclusion_overrides, selected]
+            self.optimize_excluded_upgrades = [name for name in self.optimize_excluded_upgrades if name != selected]
+            self._refresh_optimizer_exclusion_options()
+
+    @rx.event
+    def set_optimize_pending_excluded_upgrade(self, value: str):
+        if value in self.optimize_upgrade_exclusion_options:
+            self.optimize_pending_excluded_upgrade = value
+
+    @rx.event
+    def add_optimize_excluded_upgrade(self):
+        name = self.optimize_pending_excluded_upgrade
+        if not name or name not in self.optimize_upgrade_exclusion_options:
+            return
+        self.optimize_default_exclusion_overrides = [item for item in self.optimize_default_exclusion_overrides if item != name]
+        self.optimize_excluded_upgrades = [*self.optimize_excluded_upgrades, name]
+        policies = list(self.slot_policies)
+        for index, selected in enumerate(self.slot_selected_upgrades):
+            if selected == name:
+                policies[index] = SLOT_POLICY_DISCARD
+        self.slot_policies = policies
+        self._refresh_optimizer_exclusion_options()
+
+    @rx.event
+    def remove_optimize_excluded_upgrade(self, name: str):
+        if optimizer_excludes_upgrade_by_default(name) and name not in self.optimize_default_exclusion_overrides:
+            self.optimize_default_exclusion_overrides = [*self.optimize_default_exclusion_overrides, name]
+        self.optimize_excluded_upgrades = [item for item in self.optimize_excluded_upgrades if item != name]
+        self._refresh_optimizer_exclusion_options()
+
+    @rx.event
+    def clear_optimize_excluded_upgrades(self):
+        defaults = [name for name in self.optimize_excluded_upgrades if optimizer_excludes_upgrade_by_default(name)]
+        self.optimize_default_exclusion_overrides = list(dict.fromkeys([*self.optimize_default_exclusion_overrides, *defaults]))
+        self.optimize_excluded_upgrades = []
+        self._refresh_optimizer_exclusion_options()
+
+    @rx.event
+    def set_optimize_pending_excluded_riven_stat(self, value: str):
+        if value in self.optimize_riven_stat_exclusion_options:
+            self.optimize_pending_excluded_riven_stat = value
+
+    @rx.event
+    def add_optimize_excluded_riven_stat(self):
+        label = self.optimize_pending_excluded_riven_stat
+        if not label or label not in self.optimize_riven_stat_exclusion_options:
+            return
+        self.optimize_default_riven_exclusion_overrides = [item for item in self.optimize_default_riven_exclusion_overrides if item != label]
+        self.optimize_excluded_riven_stats = [*self.optimize_excluded_riven_stats, label]
+        self._refresh_optimizer_exclusion_options()
+
+    @rx.event
+    def remove_optimize_excluded_riven_stat(self, label: str):
+        field_name = self._riven_field_from_label(label)
+        if field_name and is_faction_damage_stat(field_name) and label not in self.optimize_default_riven_exclusion_overrides:
+            self.optimize_default_riven_exclusion_overrides = [*self.optimize_default_riven_exclusion_overrides, label]
+        self.optimize_excluded_riven_stats = [item for item in self.optimize_excluded_riven_stats if item != label]
+        self._refresh_optimizer_exclusion_options()
+
+    @rx.event
+    def clear_optimize_excluded_riven_stats(self):
+        defaults = [label for label in self.optimize_excluded_riven_stats if (field_name := self._riven_field_from_label(label)) and is_faction_damage_stat(field_name)]
+        self.optimize_default_riven_exclusion_overrides = list(dict.fromkeys([*self.optimize_default_riven_exclusion_overrides, *defaults]))
+        self.optimize_excluded_riven_stats = []
+        self._refresh_optimizer_exclusion_options()
+
+    @rx.event
+    def set_optimize_find_riven(self, value: bool):
+        locked = any(
+            selected == RIVEN and policy in {SLOT_POLICY_KEEP, SLOT_POLICY_KEEP_IN_SLOT}
+            for selected, policy in zip(self.slot_selected_upgrades, self.slot_policies)
+        )
+        self.optimize_find_riven = bool(value) and not locked
+
+    @rx.event(background=True)
+    async def optimize_build(self):
+        import asyncio
+        import queue as sync_queue
+
+        async with self:
+            if self.selected_weapon == NONE or self.optimize_running:
+                return
+            self.optimize_running = True
+            self.optimize_status = "Optimizing…"
+            self.optimize_phase = "Starting…"
+            self.optimize_progress = 0.0
+            self.optimize_progress_width = "0%"
+            self.optimize_evaluations = 0
+            self.optimize_best_dps = ""
+            evolutions = {
+                parse_int(self.evolution_labels[index].rsplit(" ", 1)[-1]): parse_int(selection.split()[1])
+                for index, selection in enumerate(self.evolution_selections)
+                if selection != "None"
+            }
+            riven_locked = any(
+                selected == RIVEN and policy in {SLOT_POLICY_KEEP, SLOT_POLICY_KEEP_IN_SLOT}
+                for selected, policy in zip(self.slot_selected_upgrades, self.slot_policies)
+            )
+            custom_weapon = self.selected_weapon == CUSTOM
+            request = OptimizeRequest(
+                weapon_type=self.selected_weapon_type,
+                weapon_category=self.selected_weapon_category,
+                weapon_name=self.selected_weapon,
+                custom_weapon=custom_weapon,
+                custom_weapon_entry=self.custom_weapon_entry,
+                attack_mode=self.selected_attack_mode,
+                evolutions=evolutions,
+                progenitor_element=self.progenitor_element if self._supports_progenitor() else NO_EFFECT,
+                progenitor_value=self.progenitor_value,
+                external_fields={field.name: field.value for field in self.external_fields},
+                slots=[
+                    SlotSpec(
+                        index=index,
+                        kind=config["kind"],
+                        exilus=bool(config["exilus"]),
+                        selected=self.slot_selected_upgrades[index],
+                        policy=self.slot_policies[index],
+                        rank=self.slot_ranks[index],
+                        stacks=self.slot_stacks[index],
+                        condition=self.slot_conditions_enabled[index],
+                        custom_entry=self.custom_upgrade_entries[index],
+                        riven_roll=self.slot_riven_rolls[index],
+                        riven_fields={field.name: float(field.value) for field in self.slot_fields[index]},
+                    )
+                    for index, config in enumerate(SLOT_CONFIGS)
+                ],
+                find_optimal_riven=bool(self.optimize_find_riven) and not riven_locked,
+                excluded_upgrades=set(self.optimize_excluded_upgrades),
+                excluded_riven_stats={
+                    name
+                    for label in self.optimize_excluded_riven_stats
+                    if (name := self._riven_field_from_label(label)) is not None
+                },
+                riven_disposition=self._riven_disposition(),
+                riven_base_stats=self._riven_base_stats(),
+                riven_non_negative=set(RIVEN_NON_NEGATIVE_STATS),
+            )
+
+        q: sync_queue.Queue = sync_queue.Queue()
+
+        def on_progress(phase: str, fraction: float, evaluations: int, best_dps: float | None):
+            q.put(("progress", phase, fraction, evaluations, best_dps))
+
+        def worker():
+            try:
+                result = run_optimize_build(request, progress=on_progress)
+                q.put(("done", result))
+            except Exception as exc:
+                q.put(("error", exc))
+
+        loop = asyncio.get_running_loop()
+        fut = loop.run_in_executor(None, worker)
+
+        while True:
+            await asyncio.sleep(0.15)
+            drained = False
+            while True:
+                try:
+                    msg = q.get_nowait()
+                except sync_queue.Empty:
+                    break
+                drained = True
+                if msg[0] == "progress":
+                    _, phase, fraction, evaluations, best_dps = msg
+                    async with self:
+                        self.optimize_phase = phase
+                        self.optimize_progress = float(fraction) * 100.0
+                        self.optimize_progress_width = f"{self.optimize_progress:.1f}%"
+                        self.optimize_evaluations = int(evaluations)
+                        self.optimize_status = f"{phase} · {evaluations} evals"
+                        if best_dps is not None:
+                            self.optimize_best_dps = f"{best_dps:,.2f}"
+                elif msg[0] == "done":
+                    result = msg[1]
+                    async with self:
+                        self._apply_optimize_result(result)
+                        self.optimize_status = result.message
+                        self.optimize_best_dps = f"{result.total_dps:,.2f}"
+                        self.optimize_phase = "Done"
+                        self.optimize_progress = 100.0
+                        self.optimize_progress_width = "100%"
+                        self.optimize_evaluations = result.evaluations
+                        self._refresh_upgrade_options()
+                        self._refresh_all_riven_field_limits()
+                        self._refresh_slot_field_options()
+                        self._recalculate()
+                        self.optimize_running = False
+                    await fut
+                    return
+                elif msg[0] == "error":
+                    exc = msg[1]
+                    async with self:
+                        self.optimize_status = f"{type(exc).__name__}: {exc}"
+                        self.optimize_phase = "Failed"
+                        self.optimize_running = False
+                    await fut
+                    return
+            if fut.done() and not drained:
+                exc = fut.exception()
+                async with self:
+                    if exc:
+                        self.optimize_status = f"{type(exc).__name__}: {exc}"
+                        self.optimize_phase = "Failed"
+                    self.optimize_running = False
+                return
 
     @rx.event
     def set_slot_condition(self, index: int, value: bool):
@@ -785,6 +1056,7 @@ class CalculatorState(rx.State):
 
     def _refresh_weapon_options(self):
         self.weapon_options = [
+            NONE,
             CUSTOM,
             *weapon_names_for_type(
                 self.selected_weapon_type,
@@ -792,9 +1064,16 @@ class CalculatorState(rx.State):
             ),
         ]
         if self.selected_weapon not in self.weapon_options:
-            self.selected_weapon = CUSTOM
+            self.selected_weapon = NONE
 
     def _refresh_weapon_features(self):
+        if self.selected_weapon == NONE:
+            self.attack_mode_options = []
+            self.selected_attack_mode = ""
+            self.evolution_labels = []
+            self.evolution_options = []
+            self.evolution_selections = []
+            return
         if self.custom_weapon:
             if not self.custom_weapon_entry.strip():
                 metadata = {}
@@ -852,9 +1131,58 @@ class CalculatorState(rx.State):
         self.evolution_options = [tier["options"] for tier in tiers]
         self.evolution_selections = ["None" for _ in tiers]
 
+    def _clear_slot(self, index: int, *, reset_policy: bool = True):
+        selected = list(self.slot_selected_upgrades)
+        selected[index] = NONE
+        self.slot_selected_upgrades = selected
+        max_ranks, ranks = list(self.slot_max_ranks), list(self.slot_ranks)
+        max_stacks, stacks = list(self.slot_max_stacks), list(self.slot_stacks)
+        max_ranks[index] = 5 if SLOT_CONFIGS[index]["kind"] == "arcane" else 10
+        ranks[index] = stacks[index] = max_stacks[index] = 0
+        self.slot_max_ranks, self.slot_ranks = max_ranks, ranks
+        self.slot_max_stacks, self.slot_stacks = max_stacks, stacks
+        all_fields = copy.deepcopy(self.slot_fields)
+        all_fields[index] = []
+        self.slot_fields = all_fields
+        entries = list(self.custom_upgrade_entries)
+        entries[index] = ""
+        self.custom_upgrade_entries = entries
+        if reset_policy:
+            policies = list(self.slot_policies)
+            policies[index] = SLOT_POLICY_DISCARD
+            self.slot_policies = policies
+
+    def _apply_optimize_result(self, result):
+        self.slot_selected_upgrades = list(result.slot_names)
+        self.slot_ranks = list(result.slot_ranks)
+        self.slot_stacks = list(result.slot_stacks)
+        self.slot_policies = list(result.slot_policies)
+        self.slot_riven_rolls = list(result.riven_rolls)
+        self.custom_upgrade_entries = list(result.custom_entries)
+        max_ranks, max_stacks = list(self.slot_max_ranks), list(self.slot_max_stacks)
+        all_fields = copy.deepcopy(self.slot_fields)
+        for index, config in enumerate(SLOT_CONFIGS):
+            name = result.slot_names[index]
+            if name in {NONE, CUSTOM, RIVEN}:
+                max_ranks[index] = 0 if name != NONE else (5 if config["kind"] == "arcane" else 10)
+                max_stacks[index] = 0
+            else:
+                _, maximum_rank = database_rank_bounds(name, is_arcane_slot=config["kind"] == "arcane")
+                maximum_stacks = database_max_stacks(name, is_arcane_slot=config["kind"] == "arcane") or 0
+                max_ranks[index], max_stacks[index] = maximum_rank, maximum_stacks
+            if name == RIVEN:
+                fields = []
+                for field_name, value in result.riven_fields[index].items():
+                    fields.append(EditorField(field_name, field_label(field_name), float(value), float(value), float(value), False))
+                all_fields[index] = fields
+            else:
+                all_fields[index] = []
+        self.slot_max_ranks, self.slot_max_stacks, self.slot_fields = max_ranks, max_stacks, all_fields
+
     def _refresh_upgrade_options(self):
-        weapon_name = None if self.custom_weapon else self.selected_weapon
+        weapon_name = None if self.custom_weapon or self.selected_weapon == NONE else self.selected_weapon
         self.mod_options = [
+            NONE,
             CUSTOM,
             RIVEN,
             *upgrade_names_for_ui(
@@ -867,6 +1195,7 @@ class CalculatorState(rx.State):
             ),
         ]
         self.exilus_options = [
+            NONE,
             CUSTOM,
             *upgrade_names_for_ui(
                 self.selected_weapon_category,
@@ -878,6 +1207,7 @@ class CalculatorState(rx.State):
             ),
         ]
         self.arcane_options = [
+            NONE,
             CUSTOM,
             *upgrade_names_for_ui(
                 self.selected_weapon_category,
@@ -889,8 +1219,6 @@ class CalculatorState(rx.State):
             ),
         ]
 
-        selected = list(self.slot_selected_upgrades)
-        changed = False
         for index, config in enumerate(SLOT_CONFIGS):
             allowed = (
                 self.arcane_options
@@ -899,14 +1227,40 @@ class CalculatorState(rx.State):
                 if config["exilus"]
                 else self.mod_options
             )
-            if selected[index] not in allowed:
-                selected[index] = CUSTOM
-                changed = True
-        if changed:
-            self.slot_selected_upgrades = selected
+            if self.slot_selected_upgrades[index] not in allowed:
+                self._clear_slot(index)
 
         self._refresh_slot_upgrade_options()
         self._refresh_slot_condition_metadata()
+        self._refresh_optimizer_exclusion_options()
+
+    def _refresh_optimizer_exclusion_options(self):
+        valid_upgrades = sorted(
+            {
+                name
+                for name in (*self.mod_options, *self.exilus_options, *self.arcane_options)
+                if name not in {NONE, CUSTOM, RIVEN}
+            },
+            key=str.casefold,
+        )
+        valid_upgrade_set = set(valid_upgrades)
+        default_overrides = set(self.optimize_default_exclusion_overrides)
+        default_exclusions = {name for name in valid_upgrades if name not in default_overrides and optimizer_excludes_upgrade_by_default(name)}
+        self.optimize_excluded_upgrades = sorted({name for name in self.optimize_excluded_upgrades if name in valid_upgrade_set} | default_exclusions, key=str.casefold)
+        excluded_upgrade_set = set(self.optimize_excluded_upgrades)
+        self.optimize_upgrade_exclusion_options = [name for name in valid_upgrades if name not in excluded_upgrade_set]
+        if self.optimize_pending_excluded_upgrade not in self.optimize_upgrade_exclusion_options:
+            self.optimize_pending_excluded_upgrade = self.optimize_upgrade_exclusion_options[0] if self.optimize_upgrade_exclusion_options else ""
+
+        valid_riven_stats = sorted((field_label(name) for name in self._riven_base_stats()), key=str.casefold)
+        valid_riven_stat_set = set(valid_riven_stats)
+        default_riven_overrides = set(self.optimize_default_riven_exclusion_overrides)
+        default_riven_exclusions = {field_label(name) for name in self._riven_base_stats() if field_label(name) not in default_riven_overrides and is_faction_damage_stat(name)}
+        self.optimize_excluded_riven_stats = sorted({label for label in self.optimize_excluded_riven_stats if label in valid_riven_stat_set} | default_riven_exclusions, key=str.casefold)
+        excluded_riven_stat_set = set(self.optimize_excluded_riven_stats)
+        self.optimize_riven_stat_exclusion_options = [label for label in valid_riven_stats if label not in excluded_riven_stat_set]
+        if self.optimize_pending_excluded_riven_stat not in self.optimize_riven_stat_exclusion_options:
+            self.optimize_pending_excluded_riven_stat = self.optimize_riven_stat_exclusion_options[0] if self.optimize_riven_stat_exclusion_options else ""
 
     def _refresh_slot_upgrade_options(self):
         selected = self.slot_selected_upgrades
@@ -922,18 +1276,20 @@ class CalculatorState(rx.State):
             selected_elsewhere = {
                 upgrade
                 for other_index, upgrade in enumerate(selected)
-                if other_index != index and upgrade != CUSTOM
+                if other_index != index and upgrade not in {CUSTOM, NONE}
             }
             current = selected[index]
-            options.append(
-                [
-                    upgrade
-                    for upgrade in base_options
-                    if upgrade == CUSTOM
-                    or upgrade == current
-                    or upgrade not in selected_elsewhere
-                ]
-            )
+            filtered = []
+            for upgrade in base_options:
+                if upgrade in {NONE, CUSTOM} or upgrade == current:
+                    filtered.append(upgrade)
+                    continue
+                if upgrade in selected_elsewhere:
+                    continue
+                if upgrade_conflicts_with_selected(upgrade, selected_elsewhere):
+                    continue
+                filtered.append(upgrade)
+            options.append(filtered)
         self.slot_upgrade_options = options
 
     def _refresh_slot_condition_metadata(self):
@@ -943,12 +1299,7 @@ class CalculatorState(rx.State):
 
         for index, config in enumerate(SLOT_CONFIGS):
             selected = self.slot_selected_upgrades[index]
-            if selected == RIVEN:
-                has_conditionals.append(False)
-                labels.append("")
-                enabled[index] = True
-                continue
-            if selected == CUSTOM:
+            if selected in {RIVEN, CUSTOM, NONE}:
                 has_conditionals.append(False)
                 labels.append("")
                 enabled[index] = True
@@ -1302,6 +1653,8 @@ class CalculatorState(rx.State):
     def _slot_extra_preview_stats(self, index: int) -> dict:
         selected = self.slot_selected_upgrades[index]
         config = SLOT_CONFIGS[index]
+        if selected == NONE:
+            return {}
         if selected == CUSTOM:
             try:
                 metadata = parse_database_entry(
@@ -1323,6 +1676,8 @@ class CalculatorState(rx.State):
     def _slot_upgrade(self, index: int) -> Upgrade:
         config = SLOT_CONFIGS[index]
         selected = self.slot_selected_upgrades[index]
+        if selected == NONE:
+            return Upgrade({"name": NONE, "type": config["kind"], "stats": {}})
         if selected == RIVEN:
             return self._custom_upgrade_from_fields(
                 RIVEN,
@@ -1352,6 +1707,25 @@ class CalculatorState(rx.State):
 
     def _recalculate(self):
         try:
+            if self.selected_weapon == NONE:
+                slot_upgrades = [self._slot_upgrade(index) for index in range(len(SLOT_CONFIGS))]
+                self.slot_stat_rows = [
+                    upgrade_stat_rows(upgrade, self._slot_extra_preview_stats(index))
+                    for index, upgrade in enumerate(slot_upgrades)
+                ]
+                self.slot_contributions = ["—" for _ in SLOT_CONFIGS]
+                self.main_result_metrics = []
+                self.weakpoint_result_metrics = []
+                self.ranged_result_metrics = []
+                self.misc_result_metrics = []
+                self.damage_result_rows = []
+                self.contribution_result_rows = []
+                self.result_summary = ""
+                self.result_contribution_summary = ""
+                self.result_error = "Select a weapon to calculate."
+                self.result_ready = False
+                return
+
             if self.custom_weapon and not self.custom_weapon_entry.strip():
                 raise ValueError("Custom Weapon JSON is required.")
 
@@ -1417,10 +1791,11 @@ class CalculatorState(rx.State):
 
             contributions = []
             for index, config in enumerate(SLOT_CONFIGS):
+                selected = self.slot_selected_upgrades[index]
                 contribution_name = (
-                    self.slot_selected_upgrades[index]
-                    if self.slot_selected_upgrades[index] != CUSTOM
-                    else config["label"]
+                    config["label"]
+                    if selected in {CUSTOM, NONE}
+                    else selected
                 )
                 contributions.append(
                     format_contribution(

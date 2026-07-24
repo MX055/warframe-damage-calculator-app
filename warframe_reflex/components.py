@@ -9,10 +9,15 @@ from .constants import (
     PROGENITOR_ELEMENT_OPTIONS,
     RIVEN_ROLL_OPTIONS,
     SLOT_CONFIGS,
+    SLOT_POLICY_DISCARD,
+    SLOT_POLICY_KEEP,
+    SLOT_POLICY_KEEP_IN_SLOT,
     WEAPON_TYPE_OPTIONS,
 )
 from .models import ContributionRow, DamageResultRow, DisplayRow, EditorField, MetricRow
-from .state import CUSTOM, RIVEN, CalculatorState
+from .state import CUSTOM, NONE, RIVEN, CalculatorState
+
+UPGRADE_DISPLAY_ORDER = (0, 1, 2, 3, 9, 4, 5, 6, 7, 8)
 
 
 def panel(*children, class_name: str = "panel", **props) -> rx.Component:
@@ -156,6 +161,7 @@ def mobile_quick_nav() -> rx.Component:
     return rx.hstack(
         rx.link("Weapon", href="#weapon", class_name="mobile-nav-link"),
         rx.link("Upgrades", href="#upgrades", class_name="mobile-nav-link"),
+        rx.link("Optimizer", href="#optimizer", class_name="mobile-nav-link"),
         rx.link("Results", href="#results", class_name="mobile-nav-link"),
         width="100%",
         class_name="mobile-quick-nav",
@@ -711,12 +717,16 @@ def upgrade_slot(index: int) -> rx.Component:
                 lambda value: CalculatorState.set_slot_upgrade(index, value),
             ),
             rx.cond(
-                CalculatorState.slot_selected_upgrades[index] == CUSTOM,
-                custom_slot_body(index),
+                CalculatorState.slot_selected_upgrades[index] == NONE,
+                rx.text("Empty slot.", class_name="empty-text"),
                 rx.cond(
-                    CalculatorState.slot_selected_upgrades[index] == RIVEN,
-                    riven_slot_body(index),
-                    database_slot_body(index),
+                    CalculatorState.slot_selected_upgrades[index] == CUSTOM,
+                    custom_slot_body(index),
+                    rx.cond(
+                        CalculatorState.slot_selected_upgrades[index] == RIVEN,
+                        riven_slot_body(index),
+                        database_slot_body(index),
+                    ),
                 ),
             ),
             width="100%",
@@ -793,8 +803,6 @@ def external_buffs() -> rx.Component:
 
 
 def upgrades_section() -> rx.Component:
-    # Preserve the familiar card layout without changing the canonical build order.
-    display_order = (0, 1, 2, 3, 9, 4, 5, 6, 7, 8)
     return rx.vstack(
         section_title(
             "Upgrades",
@@ -802,7 +810,7 @@ def upgrades_section() -> rx.Component:
         ),
         rx.box(
             rx.box(
-                *[upgrade_slot(index) for index in display_order],
+                *[upgrade_slot(index) for index in UPGRADE_DISPLAY_ORDER],
                 class_name="slot-grid",
             ),
             class_name="slot-grid-scroll",
@@ -817,6 +825,224 @@ def upgrades_section() -> rx.Component:
         width="100%",
         gap="4",
         id="upgrades",
+        class_name="page-section",
+    )
+
+
+def optimizer_policy_select(index: int) -> rx.Component:
+    return rx.select.root(
+        rx.select.trigger(width="100%", min_width="0", class_name="optimizer-policy-trigger"),
+        rx.select.content(
+            rx.select.group(
+                rx.select.item("Discard / replace", value=SLOT_POLICY_DISCARD),
+                rx.select.item("Keep, any compatible slot", value=SLOT_POLICY_KEEP),
+                rx.select.item("Keep in this slot", value=SLOT_POLICY_KEEP_IN_SLOT),
+            ),
+            position="popper",
+        ),
+        value=CalculatorState.slot_policies[index],
+        on_change=lambda value: CalculatorState.set_slot_policy(index, value),
+        disabled=(CalculatorState.slot_selected_upgrades[index] == NONE) | CalculatorState.optimize_running,
+        width="100%",
+    )
+
+
+def optimizer_rule_row(index: int) -> rx.Component:
+    config = SLOT_CONFIGS[index]
+    return rx.grid(
+        rx.text(config["label"], class_name="optimizer-rule-slot"),
+        rx.text(CalculatorState.slot_selected_upgrades[index], class_name="optimizer-rule-upgrade"),
+        optimizer_policy_select(index),
+        columns="76px minmax(150px, 1fr) minmax(190px, 0.8fr)",
+        align="center",
+        class_name="optimizer-rule-row",
+        width="100%",
+    )
+
+
+def optimizer_exclusion_chip(value, remove_event, *, disabled) -> rx.Component:
+    return rx.hstack(
+        rx.text(value, class_name="optimizer-chip-label"),
+        rx.button("×", on_click=remove_event, disabled=disabled, variant="ghost", class_name="optimizer-chip-remove"),
+        align="center",
+        gap="1",
+        class_name="optimizer-exclusion-chip",
+    )
+
+
+def optimizer_exclusion_editor(title: str, description: str, options, pending, set_pending, add_event, excluded, remove_event: Callable, clear_event) -> rx.Component:
+    disabled = CalculatorState.no_weapon | CalculatorState.optimize_running
+    return rx.vstack(
+        rx.hstack(
+            rx.vstack(rx.text(title, class_name="optimizer-group-title"), rx.text(description, class_name="optimizer-help"), align="start", gap="1"),
+            rx.spacer(),
+            rx.button("Clear", on_click=clear_event, disabled=disabled | (excluded.length() == 0), variant="ghost", size="1"),
+            width="100%",
+            align="start",
+        ),
+        rx.grid(
+            select_input(options, pending, set_pending, disabled=disabled | (options.length() == 0)),
+            rx.button("Exclude", on_click=add_event, disabled=disabled | (options.length() == 0), width="100%"),
+            columns="minmax(0, 1fr) 92px",
+            class_name="optimizer-exclusion-picker",
+            width="100%",
+        ),
+        rx.cond(
+            excluded.length() > 0,
+            rx.hstack(
+                rx.foreach(excluded, lambda value: optimizer_exclusion_chip(value, remove_event(value), disabled=disabled)),
+                wrap="wrap",
+                align="center",
+                gap="2",
+                width="100%",
+            ),
+            rx.text("Nothing excluded.", class_name="empty-text"),
+        ),
+        class_name="optimizer-exclusion-group",
+        width="100%",
+        align="start",
+        gap="3",
+    )
+
+
+def optimizer_run_controls() -> rx.Component:
+    disabled = CalculatorState.no_weapon | CalculatorState.optimize_running
+    return rx.vstack(
+        rx.hstack(
+            rx.checkbox(
+                checked=CalculatorState.optimize_find_riven,
+                on_change=CalculatorState.set_optimize_find_riven,
+                disabled=disabled | CalculatorState.riven_optimize_disabled,
+            ),
+            rx.vstack(
+                rx.text("Find optimal Riven", class_name="toggle-label"),
+                rx.text("Search allowed Riven stats after the upgrade build is optimized.", class_name="optimizer-help"),
+                align="start",
+                gap="1",
+            ),
+            align="start",
+            gap="2",
+            width="100%",
+        ),
+        rx.cond(
+            CalculatorState.riven_optimize_disabled,
+            rx.text("Riven search is disabled while a Riven is marked keep or keep in slot.", class_name="optimizer-warning"),
+        ),
+        rx.button(
+            rx.cond(CalculatorState.optimize_running, "Optimizing…", "Optimize build"),
+            on_click=CalculatorState.optimize_build,
+            disabled=disabled,
+            width="100%",
+            size="3",
+        ),
+        rx.cond(
+            CalculatorState.optimize_running | (CalculatorState.optimize_progress > 0),
+            rx.vstack(
+                rx.box(
+                    rx.box(class_name="optimizer-progress-fill", width=CalculatorState.optimize_progress_width),
+                    class_name="optimizer-progress-track",
+                ),
+                rx.hstack(
+                    rx.text(CalculatorState.optimize_phase, class_name="empty-text"),
+                    rx.spacer(),
+                    rx.text(CalculatorState.optimize_evaluations, " evaluations", class_name="empty-text"),
+                    width="100%",
+                ),
+                width="100%",
+                gap="2",
+            ),
+        ),
+        rx.cond(CalculatorState.optimize_status != "", rx.text(CalculatorState.optimize_status, class_name="empty-text")),
+        rx.cond(CalculatorState.optimize_best_dps != "", rx.text("Best DPS: ", CalculatorState.optimize_best_dps, class_name="preview-value")),
+        width="100%",
+        gap="3",
+        align="start",
+        class_name="optimizer-run-controls",
+    )
+
+
+def optimizer_section() -> rx.Component:
+    return rx.vstack(
+        section_title("Optimize", "Set build rules and exclusions, then search legal upgrades for higher total DPS."),
+        rx.accordion.root(
+            rx.accordion.item(
+                header=rx.hstack(
+                    rx.vstack(
+                        rx.text("Optimization menu", class_name="optimizer-menu-title"),
+                        rx.text("Keep, replace, and exclusion rules", class_name="optimizer-help"),
+                        align="start",
+                        gap="1",
+                    ),
+                    rx.spacer(),
+                    rx.badge(CalculatorState.optimize_excluded_upgrades.length(), " upgrades excluded", variant="soft"),
+                    rx.badge(CalculatorState.optimize_excluded_riven_stats.length(), " Riven stats excluded", variant="soft"),
+                    width="100%",
+                    align="center",
+                    wrap="wrap",
+                    gap="2",
+                ),
+                content=rx.vstack(
+                    rx.cond(CalculatorState.no_weapon, rx.text("Select a weapon to configure and run optimization.", class_name="optimizer-warning")),
+                    rx.grid(
+                        rx.vstack(
+                            rx.text("Current build rules", class_name="optimizer-group-title"),
+                            rx.text("Discard lets the optimizer replace an upgrade. Keep may move it; keep in slot locks its position.", class_name="optimizer-help"),
+                            rx.vstack(*[optimizer_rule_row(index) for index in UPGRADE_DISPLAY_ORDER], width="100%", gap="0", class_name="optimizer-rule-list"),
+                            width="100%",
+                            align="start",
+                            gap="3",
+                            class_name="optimizer-rules-group",
+                        ),
+                        rx.vstack(
+                            optimizer_exclusion_editor(
+                                "Excluded upgrades",
+                                "Faction damage and external-activation upgrades start excluded. Remove any chip to allow it.",
+                                CalculatorState.optimize_upgrade_exclusion_options,
+                                CalculatorState.optimize_pending_excluded_upgrade,
+                                CalculatorState.set_optimize_pending_excluded_upgrade,
+                                CalculatorState.add_optimize_excluded_upgrade,
+                                CalculatorState.optimize_excluded_upgrades,
+                                CalculatorState.remove_optimize_excluded_upgrade,
+                                CalculatorState.clear_optimize_excluded_upgrades,
+                            ),
+                            optimizer_exclusion_editor(
+                                "Excluded Riven stats",
+                                "Faction damage stats start excluded. Remove any chip to allow one.",
+                                CalculatorState.optimize_riven_stat_exclusion_options,
+                                CalculatorState.optimize_pending_excluded_riven_stat,
+                                CalculatorState.set_optimize_pending_excluded_riven_stat,
+                                CalculatorState.add_optimize_excluded_riven_stat,
+                                CalculatorState.optimize_excluded_riven_stats,
+                                CalculatorState.remove_optimize_excluded_riven_stat,
+                                CalculatorState.clear_optimize_excluded_riven_stats,
+                            ),
+                            width="100%",
+                            align="start",
+                            gap="3",
+                            class_name="optimizer-exclusions-column",
+                        ),
+                        columns="minmax(0, 1.35fr) minmax(320px, 0.85fr)",
+                        class_name="optimizer-settings-grid",
+                        width="100%",
+                    ),
+                    rx.separator(width="100%"),
+                    optimizer_run_controls(),
+                    width="100%",
+                    align="start",
+                    gap="4",
+                    class_name="optimizer-menu-content",
+                ),
+                value="optimizer-menu",
+            ),
+            type="single",
+            collapsible=True,
+            default_value="optimizer-menu",
+            width="100%",
+            class_name="optimizer-menu",
+        ),
+        width="100%",
+        gap="3",
+        id="optimizer",
         class_name="page-section",
     )
 
@@ -1003,6 +1229,7 @@ def page() -> rx.Component:
             read_me(),
             weapon_section(),
             upgrades_section(),
+            optimizer_section(),
             results_section(),
             width="100%",
             gap="7",

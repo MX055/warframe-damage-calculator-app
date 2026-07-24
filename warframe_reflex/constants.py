@@ -41,6 +41,11 @@ DAMAGE_TYPES = (
 DEFAULT_DAMAGE_TYPES = ("impact", "puncture", "slash")
 NO_EFFECT = "None"
 
+SLOT_POLICY_DISCARD = "discard"
+SLOT_POLICY_KEEP = "keep"
+SLOT_POLICY_KEEP_IN_SLOT = "keep in slot"
+SLOT_POLICY_OPTIONS = (SLOT_POLICY_DISCARD, SLOT_POLICY_KEEP, SLOT_POLICY_KEEP_IN_SLOT)
+
 RIVEN_ROLL_CONFIGS = {
     "2 Positive": (2, 0, 0.99, 0.0),
     "2 Positive + 1 Negative": (2, 1, 1.2375, -0.495),
