@@ -924,7 +924,7 @@ def optimizer_policy_select(index: int) -> rx.Component:
         rx.select.trigger(width="100%", min_width="0", class_name="optimizer-policy-trigger"),
         rx.select.content(
             rx.select.group(
-                rx.select.item("Discard / replace", value=SLOT_POLICY_DISCARD),
+                rx.select.item("Replace", value=SLOT_POLICY_DISCARD),
                 rx.select.item("Keep, any compatible slot", value=SLOT_POLICY_KEEP),
                 rx.select.item("Keep in this slot", value=SLOT_POLICY_KEEP_IN_SLOT),
             ),
