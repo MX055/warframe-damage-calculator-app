@@ -326,6 +326,12 @@ def weapon_is_pseudo_exalted(weapon_name: str | None, *, custom_metadata: dict |
     return bool(metadata and metadata.get("pseudo_exalted"))
 
 
+def weapon_uses_ability_strength(weapon_name: str | None, *, custom_metadata: dict | None = None) -> bool:
+    """True for exalted / pseudo-exalted weapons scaled by Ability Strength."""
+    metadata = _weapon_flag_metadata(weapon_name, custom_metadata=custom_metadata)
+    return bool(metadata and (metadata.get("exalted") or metadata.get("pseudo_exalted")))
+
+
 def weapon_is_companion(weapon_name: str | None, *, custom_metadata: dict | None = None) -> bool:
     """True for companion weapons that do not use stance mods or stance combos."""
     metadata = _weapon_flag_metadata(weapon_name, custom_metadata=custom_metadata)

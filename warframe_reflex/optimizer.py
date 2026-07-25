@@ -100,6 +100,7 @@ class OptimizeRequest:
     find_optimal_evolutions: bool = False
     maximize_target: str = OPTIMIZE_MAXIMIZE_TARGETS[DEFAULT_OPTIMIZE_MAXIMIZE]
     stance_combo: str = "neutral"
+    ability_strength: float | None = None
     excluded_upgrades: set[str] = field(default_factory=set)
     excluded_riven_stats: set[str] = field(default_factory=set)
     riven_disposition: float = 1.0
@@ -222,6 +223,7 @@ def optimize_build(request: OptimizeRequest, progress: ProgressCallback | None =
         custom_entry=request.custom_weapon_entry if request.custom_weapon else None,
         selected_mode=request.attack_mode or None, evolutions=request.evolutions or None,
         stance_combo=stance_combo if request.weapon_type == "Melee" else None,
+        ability_strength=request.ability_strength,
     )
     optimizer_build = Build()
     optimizer_weapon.build = optimizer_build

@@ -56,6 +56,7 @@ from .data import (
     weapon_exclusive_stance_names,
     weapon_has_riven_disposition,
     weapon_names_for_type,
+    weapon_uses_ability_strength,
 )
 from .optimizer import OptimizeRequest, SlotSpec, optimize_build as run_optimize_build
 from .engine import (
@@ -121,6 +122,7 @@ BASE_NUMBER_BOUNDS: dict[str, tuple[float, float, bool]] = {
     "base_burst_count": (1.0, 100.0, True),
     "base_burst_delay": (0.0, 20.0, False),
     "progenitor_value": (0.0, 10.0, False),
+    "ability_strength": (0.0, 1000.0, False),
 }
 
 
@@ -312,6 +314,8 @@ class CalculatorState(rx.State):
 
     progenitor_element: str = NO_EFFECT
     progenitor_value: float = 0.0
+    ability_strength: float = 100.0
+    ability_strength_available: bool = False
 
     is_battery: bool = False
     is_charge_weapon: bool = False
@@ -460,6 +464,11 @@ class CalculatorState(rx.State):
     @rx.var
     def supports_progenitor(self) -> bool:
         return self._supports_progenitor()
+
+    def _ability_strength_multiplier(self) -> float | None:
+        if not self.ability_strength_available:
+            return None
+        return max(float(self.ability_strength), 0.0) / 100.0
 
     @rx.event
     def initialize(self):
@@ -855,6 +864,7 @@ class CalculatorState(rx.State):
                 find_optimal_evolutions=bool(self.optimize_find_evolutions) and bool(self.evolution_options),
                 maximize_target=OPTIMIZE_MAXIMIZE_TARGETS.get(self.optimize_maximize_target, OPTIMIZE_MAXIMIZE_TARGETS[DEFAULT_OPTIMIZE_MAXIMIZE]),
                 stance_combo=self.selected_stance_combo if self.stance_combo_available else "neutral",
+                ability_strength=self._ability_strength_multiplier(),
                 excluded_upgrades=set(self.optimize_excluded_upgrades),
                 excluded_riven_stats={
                     name
@@ -1136,6 +1146,16 @@ class CalculatorState(rx.State):
         if self.selected_weapon not in self.weapon_options:
             self.selected_weapon = NONE
 
+    def _refresh_ability_strength_available(self, *, custom_metadata: dict | None = None):
+        if self.selected_weapon == NONE:
+            self.ability_strength_available = False
+            return
+        weapon_name = None if self.custom_weapon else self.selected_weapon
+        metadata = custom_metadata if self.custom_weapon else None
+        if self.custom_weapon and metadata is None:
+            metadata = self._custom_weapon_metadata()
+        self.ability_strength_available = weapon_uses_ability_strength(weapon_name, custom_metadata=metadata)
+
     def _refresh_weapon_features(self):
         if self.selected_weapon == NONE:
             self.attack_mode_options = []
@@ -1143,6 +1163,7 @@ class CalculatorState(rx.State):
             self.evolution_labels = []
             self.evolution_options = []
             self.evolution_selections = []
+            self.ability_strength_available = False
             return
         if self.custom_weapon:
             if not self.custom_weapon_entry.strip():
@@ -1156,6 +1177,7 @@ class CalculatorState(rx.State):
                     )
                 except ValueError:
                     metadata = {}
+            self._refresh_ability_strength_available(custom_metadata=metadata)
             attacks = metadata.get("attacks") or {}
             child_names = {
                 child
@@ -1194,6 +1216,7 @@ class CalculatorState(rx.State):
             if not tiers:
                 self.optimize_find_evolutions = False
             return
+        self._refresh_ability_strength_available()
         modes = list(weapon_attack_modes(self.selected_weapon))
         self.attack_mode_options = modes
         if self.selected_attack_mode not in modes:
@@ -1306,6 +1329,7 @@ class CalculatorState(rx.State):
             )
 
         has_weapon = self.selected_weapon != NONE
+        self._refresh_ability_strength_available(custom_metadata=custom_metadata)
         self.riven_available = has_weapon and weapon_has_riven_disposition(weapon_name, custom_metadata=custom_metadata)
         if not self.riven_available:
             self.optimize_find_riven = False
@@ -1957,6 +1981,7 @@ class CalculatorState(rx.State):
                 selected_mode=self.selected_attack_mode or None,
                 evolutions=evolutions,
                 stance_combo=self.selected_stance_combo if self.stance_combo_available else None,
+                ability_strength=self._ability_strength_multiplier(),
             )
             contribution_lookup = contribution_lookup_for_weapon(
                 weapon,

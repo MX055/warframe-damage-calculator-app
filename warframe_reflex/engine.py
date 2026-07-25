@@ -390,6 +390,7 @@ def configured_weapon(
     selected_mode: str | None = None,
     evolutions: dict[int, int] | None = None,
     stance_combo: str | None = None,
+    ability_strength: float | None = None,
 ):
     weapon_type = WEAPON_TYPES[weapon_type_name]
     if custom_weapon:
@@ -434,6 +435,8 @@ def configured_weapon(
         context["evolutions"] = evolutions
     if stance_combo:
         context["stance_combo"] = stance_combo
+    if ability_strength is not None:
+        context["ability_strength"] = float(ability_strength)
     weapon.configure(Build(*upgrades), context=context or None)
     return weapon
 

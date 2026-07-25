@@ -322,6 +322,21 @@ def supported_progenitor_controls() -> rx.Component:
     return rx.cond(CalculatorState.supports_progenitor, progenitor_controls())
 
 
+def ability_strength_control() -> rx.Component:
+    return number_control(
+        "Ability Strength (%)",
+        CalculatorState.ability_strength,
+        lambda value: CalculatorState.set_base_number("ability_strength", value),
+        minimum=0,
+        maximum=1000,
+        step="1",
+    )
+
+
+def supported_ability_strength_control() -> rx.Component:
+    return rx.cond(CalculatorState.ability_strength_available, ability_strength_control())
+
+
 def database_entry_input(
     label: str,
     value,
@@ -513,6 +528,7 @@ def weapon_section() -> rx.Component:
                     custom_base_stats(),
                     supported_progenitor_controls(),
                 ),
+                supported_ability_strength_control(),
                 width="100%",
                 gap="5",
             )
@@ -655,7 +671,6 @@ def stance_combo_control() -> rx.Component:
         rx.cond(
             CalculatorState.stance_combo_locked,
             rx.text("Combo is determined by the selected attack mode.", class_name="optimizer-help"),
-            rx.text("Chosen independently of the equipped stance. Attack mode controls which combos are available.", class_name="optimizer-help"),
         ),
         width="100%",
         gap="1",
