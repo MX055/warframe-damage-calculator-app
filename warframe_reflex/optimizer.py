@@ -7,7 +7,9 @@ from typing import Iterable
 from warframe_damage_calculator import Build, Upgrade
 
 from .constants import (
+    DEFAULT_OPTIMIZE_MAXIMIZE,
     NO_EFFECT,
+    OPTIMIZE_MAXIMIZE_TARGETS,
     RIVEN_NON_NEGATIVE_STATS,
     RIVEN_ROLL_CONFIGS,
     RIVEN_ROLL_OPTIONS,
@@ -17,6 +19,7 @@ from .constants import (
     SLOT_POLICY_KEEP_IN_SLOT,
 )
 from .data import (
+    _upgrade_names_for_ui,
     database_max_stacks,
     database_rank_bounds,
     database_upgrade,
@@ -24,7 +27,7 @@ from .data import (
     upgrade_conflicts_with_selected,
     upgrade_names_for_ui,
 )
-from .engine import build_upgrade, configured_weapon, custom_upgrade_from_entry, is_non_empty_upgrade, progenitor_upgrade
+from .engine import build_upgrade, configured_weapon, custom_upgrade_from_entry, is_non_empty_upgrade, parse_database_entry, progenitor_upgrade
 
 NONE = "None"
 CUSTOM = "Custom"
@@ -46,7 +49,9 @@ CANDIDATE_PER_STAT_LIMIT = 2
 CANDIDATE_RAW_STAT_LIMIT = 2
 HILL_CLIMB_SWAP_LIMIT = 60
 
-ProgressCallback = Callable[[str, float, int, float | None], None]  # phase, fraction 0-1, evaluations, best_dps
+ProgressCallback = Callable[[str, float, int, float | None], None]  # phase, fraction 0-1, evaluations, best_score
+MAXIMIZE_TARGET_ATTRS = frozenset(OPTIMIZE_MAXIMIZE_TARGETS.values())
+MAXIMIZE_TARGET_LABELS = {attr: label for label, attr in OPTIMIZE_MAXIMIZE_TARGETS.items()}
 
 
 @dataclass
@@ -59,6 +64,7 @@ class SlotSpec:
     rank: int
     stacks: int
     condition: bool
+    stance: bool = False
     custom_entry: str = ""
     riven_roll: str = "2 Positive + 1 Negative"
     riven_fields: dict[str, float] = field(default_factory=dict)
@@ -78,6 +84,8 @@ class OptimizeRequest:
     external_fields: dict[str, float]
     slots: list[SlotSpec]
     find_optimal_riven: bool
+    maximize_target: str = OPTIMIZE_MAXIMIZE_TARGETS[DEFAULT_OPTIMIZE_MAXIMIZE]
+    stance_combo: str = "neutral"
     excluded_upgrades: set[str] = field(default_factory=set)
     excluded_riven_stats: set[str] = field(default_factory=set)
     riven_disposition: float = 1.0
@@ -146,6 +154,10 @@ def optimize_build(request: OptimizeRequest, progress: ProgressCallback | None =
     slots = sorted(request.slots, key=lambda item: item.index)
     if len(slots) != len(SLOT_CONFIGS):
         raise ValueError("Optimizer expects one SlotSpec per configured slot.")
+    maximize_target = request.maximize_target
+    if maximize_target not in MAXIMIZE_TARGET_ATTRS:
+        raise ValueError(f"unsupported maximize target {maximize_target!r}; expected one of {sorted(MAXIMIZE_TARGET_ATTRS)}")
+    maximize_label = MAXIMIZE_TARGET_LABELS.get(maximize_target, maximize_target)
 
     evaluations = 0
 
@@ -157,9 +169,25 @@ def optimize_build(request: OptimizeRequest, progress: ProgressCallback | None =
 
     weapon_filter_name = None if request.custom_weapon else request.weapon_name
     excluded_upgrades = set(request.excluded_upgrades)
-    mod_pool = [name for name in _cap_candidates(upgrade_names_for_ui(request.weapon_category, weapon_filter_name, request.attack_mode, True, False, False)) if name not in excluded_upgrades]
-    exilus_pool = [name for name in _cap_candidates(upgrade_names_for_ui(request.weapon_category, weapon_filter_name, request.attack_mode, True, False, True)) if name not in excluded_upgrades]
-    arcane_pool = [name for name in _cap_candidates(upgrade_names_for_ui(request.weapon_category, weapon_filter_name, request.attack_mode, False, True, False)) if name not in excluded_upgrades]
+    custom_metadata = None
+    if request.custom_weapon and request.custom_weapon_entry.strip():
+        try:
+            custom_metadata = parse_database_entry(request.custom_weapon_entry, default_name="Custom Weapon", default_type=request.weapon_type.casefold())
+        except ValueError:
+            custom_metadata = None
+
+    def upgrade_pool(include_mods: bool, include_arcanes: bool, exilus_only: bool, *, stance_only: bool = False) -> list[str]:
+        if custom_metadata is not None:
+            names = _upgrade_names_for_ui(request.weapon_category, weapon_filter_name, request.attack_mode, include_mods, include_arcanes, exilus_only, stance_only=stance_only, custom_metadata=custom_metadata)
+        else:
+            names = upgrade_names_for_ui(request.weapon_category, weapon_filter_name, request.attack_mode, include_mods, include_arcanes, exilus_only, stance_only)
+        capped = list(names) if stance_only else _cap_candidates(names)
+        return [name for name in capped if name not in excluded_upgrades]
+
+    mod_pool = upgrade_pool(True, False, False)
+    stance_pool = upgrade_pool(True, False, False, stance_only=True) if request.weapon_type == "Melee" else []
+    exilus_pool = upgrade_pool(True, False, True)
+    arcane_pool = upgrade_pool(False, True, False)
 
     n = len(slots)
     names = [NONE for _ in range(n)]
@@ -169,6 +197,7 @@ def optimize_build(request: OptimizeRequest, progress: ProgressCallback | None =
     rolls = [slot.riven_roll for slot in slots]
     riven_fields = [{} for _ in range(n)]
     customs = [slot.custom_entry for slot in slots]
+    stance_combo = request.stance_combo if request.weapon_type == "Melee" else "neutral"
 
     progenitor = progenitor_upgrade(request.progenitor_element, request.progenitor_value, NO_EFFECT)
     external = build_upgrade("External Buffs", dict(request.external_fields))
@@ -176,6 +205,7 @@ def optimize_build(request: OptimizeRequest, progress: ProgressCallback | None =
         request.weapon_type, request.weapon_name, custom_weapon=request.custom_weapon, base_stats={}, upgrades=[],
         custom_entry=request.custom_weapon_entry if request.custom_weapon else None,
         selected_mode=request.attack_mode or None, evolutions=request.evolutions or None,
+        stance_combo=stance_combo if request.weapon_type == "Melee" else None,
     )
     optimizer_build = Build()
     optimizer_weapon.build = optimizer_build
@@ -200,6 +230,8 @@ def optimize_build(request: OptimizeRequest, progress: ProgressCallback | None =
         slot = slots[index]
         if slot.kind == "arcane":
             return arcane_pool
+        if slot.stance:
+            return stance_pool
         return exilus_pool if slot.exilus else mod_pool
 
     def occupied(exclude: int | None = None) -> set[str]:
@@ -221,6 +253,12 @@ def optimize_build(request: OptimizeRequest, progress: ProgressCallback | None =
             return build_upgrade(RIVEN, riven_fields[index])
         return cached_db_upgrade(name, slot.kind, ranks[index], stacks_list[index], True)
 
+    def equipped_stance_name() -> str:
+        for index, slot in enumerate(slots):
+            if slot.stance:
+                return names[index]
+        return NONE
+
     def score() -> float:
         nonlocal evaluations
         key = (
@@ -237,8 +275,10 @@ def optimize_build(request: OptimizeRequest, progress: ProgressCallback | None =
         if is_non_empty_upgrade(external):
             upgrades.append(external)
         optimizer_build.upgrades = upgrades
+        if request.weapon_type == "Melee":
+            optimizer_weapon.data.runtime.stance_combo = stance_combo
         optimizer_weapon.results.resolve(validate_cycles=False)
-        result = float(optimizer_weapon.results.main.final.total_dps)
+        result = float(getattr(optimizer_weapon.results.main.final, maximize_target))
         score_cache[key] = result
         return result
 
@@ -265,8 +305,9 @@ def optimize_build(request: OptimizeRequest, progress: ProgressCallback | None =
         target = i if i in candidates else (candidates[0] if candidates else i)
         place(target, slot.selected, policy=SLOT_POLICY_KEEP, rank=slot.rank, stacks=slot.stacks, roll=slot.riven_roll, fields=slot.riven_fields, custom=slot.custom_entry)
 
-    # Open slots: not keep / keep-in-slot (includes None and discard).
+    # Open slots: not keep / keep-in-slot (includes None and discard). Stance first so combo DPS is settled early.
     open_slots = [i for i in range(n) if policies[i] not in {SLOT_POLICY_KEEP, SLOT_POLICY_KEEP_IN_SLOT}]
+    open_slots.sort(key=lambda index: (0 if slots[index].stance else 1, index))
     for i in open_slots:
         # Seed discard selections that are still present as starting point, else clear.
         slot = slots[i]
@@ -286,7 +327,8 @@ def optimize_build(request: OptimizeRequest, progress: ProgressCallback | None =
     # evaluates the strongest candidates in every slot without repeatedly scanning
     # hundreds of clearly weaker upgrades.
     pool_groups = [
-        (mod_pool, [i for i in open_slots if slots[i].kind == "mod" and not slots[i].exilus]),
+        (mod_pool, [i for i in open_slots if slots[i].kind == "mod" and not slots[i].exilus and not slots[i].stance]),
+        (stance_pool, [i for i in open_slots if slots[i].stance]),
         (exilus_pool, [i for i in open_slots if slots[i].kind == "mod" and slots[i].exilus]),
         (arcane_pool, [i for i in open_slots if slots[i].kind == "arcane"]),
     ]
@@ -330,8 +372,9 @@ def optimize_build(request: OptimizeRequest, progress: ProgressCallback | None =
         return retained
 
     mod_pool = shortlist(mod_pool, pool_groups[0][1])
-    exilus_pool = shortlist(exilus_pool, pool_groups[1][1])
-    arcane_pool = shortlist(arcane_pool, pool_groups[2][1])
+    stance_pool = shortlist(stance_pool, pool_groups[1][1])
+    exilus_pool = shortlist(exilus_pool, pool_groups[2][1])
+    arcane_pool = shortlist(arcane_pool, pool_groups[3][1])
     report("Candidates ready", 0.15, baseline)
 
     # 3) Greedy fill open slots by best ΔDPS.
@@ -386,7 +429,7 @@ def optimize_build(request: OptimizeRequest, progress: ProgressCallback | None =
 
     riven_note = ""
     if request.find_optimal_riven:
-        targets = [i for i in open_slots if slots[i].kind == "mod" and not slots[i].exilus]
+        targets = [i for i in open_slots if slots[i].kind == "mod" and not slots[i].exilus and not slots[i].stance]
         preferred = [i for i in targets if names[i] == RIVEN] or [i for i in targets if names[i] == NONE] or targets
         if not preferred:
             riven_note = " No open mod slot for Riven search."
@@ -457,9 +500,11 @@ def optimize_build(request: OptimizeRequest, progress: ProgressCallback | None =
     final_dps = score()
     report("Finishing…", 0.99, final_dps)
     filled = sum(1 for name in names if name != NONE)
+    stance_name = equipped_stance_name()
+    stance_note = f" Stance {stance_name}." if request.weapon_type == "Melee" and stance_name not in {NONE, CUSTOM, RIVEN} else ""
     return OptimizeResult(
         slot_names=names, slot_ranks=ranks, slot_stacks=stacks_list, slot_policies=policies,
         riven_rolls=rolls, riven_fields=riven_fields, custom_entries=customs,
         total_dps=final_dps, evaluations=evaluations,
-        message=f"Optimized {filled} slots | {evaluations} evaluations | {final_dps:,.1f} DPS.{riven_note}",
+        message=f"Optimized {filled} slots | {evaluations} evaluations | {final_dps:,.1f} {maximize_label}.{riven_note}{stance_note}",
     )

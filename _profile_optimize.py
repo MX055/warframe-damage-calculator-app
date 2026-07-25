@@ -1,4 +1,4 @@
-﻿"""Profile optimize_build bottlenecks for Corinth Prime."""
+"""Profile optimize_build bottlenecks for Corinth Prime."""
 from __future__ import annotations
 import time
 from warframe_reflex.constants import SLOT_CONFIGS, SLOT_POLICY_DISCARD
@@ -32,6 +32,8 @@ def main():
     for cfg in SLOT_CONFIGS:
         if cfg["kind"] == "arcane":
             greedy_est += len(arcane_pool)
+        elif cfg.get("stance"):
+            continue
         elif cfg["exilus"]:
             greedy_est += len(exilus_pool)
         else:
@@ -78,7 +80,7 @@ def main():
 
     print("\n=== optimize_build (Corinth Prime, all None/discard, find_optimal_riven=False) ===")
     slots = [
-        SlotSpec(index=i, kind=cfg["kind"], exilus=cfg["exilus"], selected="None", policy=SLOT_POLICY_DISCARD, rank=0, stacks=0, condition=True)
+        SlotSpec(index=i, kind=cfg["kind"], exilus=cfg["exilus"], stance=bool(cfg.get("stance")), selected="None", policy=SLOT_POLICY_DISCARD, rank=0, stacks=0, condition=True)
         for i, cfg in enumerate(SLOT_CONFIGS)
     ]
     req = OptimizeRequest(

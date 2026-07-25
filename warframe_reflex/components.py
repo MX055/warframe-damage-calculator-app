@@ -5,19 +5,22 @@ from typing import Callable
 import reflex as rx
 
 from .constants import (
+    ARCANE_SLOT_INDEX,
+    EXILUS_SLOT_INDEX,
+    MOD_SLOT_INDICES,
     NO_EFFECT,
+    OPTIMIZER_SLOT_ORDER,
     PROGENITOR_ELEMENT_OPTIONS,
     RIVEN_ROLL_OPTIONS,
     SLOT_CONFIGS,
     SLOT_POLICY_DISCARD,
     SLOT_POLICY_KEEP,
     SLOT_POLICY_KEEP_IN_SLOT,
+    STANCE_SLOT_INDEX,
     WEAPON_TYPE_OPTIONS,
 )
 from .models import ContributionRow, DamageResultRow, DisplayRow, EditorField, MetricRow
 from .state import CUSTOM, NONE, RIVEN, CalculatorState
-
-UPGRADE_DISPLAY_ORDER = (0, 1, 2, 3, 9, 4, 5, 6, 7, 8)
 
 
 def panel(*children, class_name: str = "panel", **props) -> rx.Component:
@@ -484,6 +487,10 @@ def weapon_section() -> rx.Component:
                     ),
                 ),
                 rx.cond(
+                    CalculatorState.stance_combo_available,
+                    stance_combo_control(),
+                ),
+                rx.cond(
                     CalculatorState.evolution_options.length() > 0,
                     rx.grid(
                         rx.foreach(
@@ -573,29 +580,32 @@ def slot_options(index: int):
 
 def upgrade_runtime_controls(index: int) -> rx.Component:
     return rx.vstack(
-        rx.grid(
-            number_control(
-                "Rank",
-                CalculatorState.slot_ranks[index],
-                lambda value: CalculatorState.set_slot_rank(index, value),
-                minimum=0,
-                maximum=CalculatorState.slot_max_ranks[index],
-                step="1",
-            ),
-            rx.cond(
-                CalculatorState.slot_max_stacks[index] > 0,
+        rx.cond(
+            CalculatorState.slot_max_ranks[index] > 0,
+            rx.grid(
                 number_control(
-                    "Stacks",
-                    CalculatorState.slot_stacks[index],
-                    lambda value: CalculatorState.set_slot_stacks(index, value),
+                    "Rank",
+                    CalculatorState.slot_ranks[index],
+                    lambda value: CalculatorState.set_slot_rank(index, value),
                     minimum=0,
-                    maximum=CalculatorState.slot_max_stacks[index],
+                    maximum=CalculatorState.slot_max_ranks[index],
                     step="1",
                 ),
+                rx.cond(
+                    CalculatorState.slot_max_stacks[index] > 0,
+                    number_control(
+                        "Stacks",
+                        CalculatorState.slot_stacks[index],
+                        lambda value: CalculatorState.set_slot_stacks(index, value),
+                        minimum=0,
+                        maximum=CalculatorState.slot_max_stacks[index],
+                        step="1",
+                    ),
+                ),
+                columns="repeat(2, minmax(0, 1fr))",
+                column_gap="8px",
+                width="100%",
             ),
-            columns="repeat(2, minmax(0, 1fr))",
-            column_gap="8px",
-            width="100%",
         ),
         rx.cond(
             CalculatorState.slot_has_conditionals[index],
@@ -617,6 +627,25 @@ def upgrade_runtime_controls(index: int) -> rx.Component:
         ),
         width="100%",
         gap="3",
+    )
+
+
+def stance_combo_control() -> rx.Component:
+    return rx.vstack(
+        select_control(
+            "Stance Combo",
+            CalculatorState.stance_combo_options,
+            CalculatorState.selected_stance_combo,
+            CalculatorState.set_stance_combo,
+            disabled=CalculatorState.stance_combo_locked,
+        ),
+        rx.cond(
+            CalculatorState.stance_combo_locked,
+            rx.text("Combo is determined by the selected attack mode.", class_name="optimizer-help"),
+            rx.text("Chosen independently of the equipped stance. Attack mode controls which combos are available.", class_name="optimizer-help"),
+        ),
+        width="100%",
+        gap="1",
     )
 
 
@@ -721,6 +750,7 @@ def upgrade_slot(index: int) -> rx.Component:
             ),
             rx.vstack(
                 select_input(slot_options(index), CalculatorState.slot_selected_upgrades[index], lambda value: CalculatorState.set_slot_upgrade(index, value)),
+                *([rx.cond(CalculatorState.exclusive_stance_weapon, rx.text("Exalted weapons always use their own stance.", class_name="optimizer-help"))] if index == STANCE_SLOT_INDEX else []),
                 rx.cond(
                     CalculatorState.slot_selected_upgrades[index] == NONE,
                     rx.text("Select an upgrade to edit its settings.", class_name="empty-text"),
@@ -811,17 +841,68 @@ def external_buffs() -> rx.Component:
     )
 
 
+def slot_spacer() -> rx.Component:
+    return rx.box(class_name="slot-spacer", aria_hidden=True)
+
+
+def mod_upgrade_grid() -> rx.Component:
+    return rx.box(
+        *[upgrade_slot(index) for index in MOD_SLOT_INDICES],
+        class_name="slot-grid slot-grid-mods",
+    )
+
+
+def ranged_upgrade_grid() -> rx.Component:
+    return rx.vstack(
+        rx.box(
+            slot_spacer(),
+            upgrade_slot(EXILUS_SLOT_INDEX),
+            upgrade_slot(ARCANE_SLOT_INDEX),
+            slot_spacer(),
+            class_name="slot-grid slot-grid-top slot-grid-top-ranged",
+        ),
+        mod_upgrade_grid(),
+        width="100%",
+        gap="3",
+        class_name="slot-grid-stack",
+    )
+
+
+def melee_upgrade_grid() -> rx.Component:
+    return rx.vstack(
+        rx.cond(
+            CalculatorState.stance_slot_available,
+            rx.box(
+                slot_spacer(),
+                upgrade_slot(STANCE_SLOT_INDEX),
+                upgrade_slot(EXILUS_SLOT_INDEX),
+                upgrade_slot(ARCANE_SLOT_INDEX),
+                slot_spacer(),
+                class_name="slot-grid slot-grid-top slot-grid-top-melee",
+            ),
+            rx.box(
+                slot_spacer(),
+                upgrade_slot(EXILUS_SLOT_INDEX),
+                upgrade_slot(ARCANE_SLOT_INDEX),
+                slot_spacer(),
+                class_name="slot-grid slot-grid-top slot-grid-top-ranged",
+            ),
+        ),
+        mod_upgrade_grid(),
+        width="100%",
+        gap="3",
+        class_name="slot-grid-stack",
+    )
+
+
 def upgrades_section() -> rx.Component:
     return rx.vstack(
         section_title(
             "Upgrades",
-            "Eight normal mod slots, one Exilus slot, one Arcane slot, and external buffs.",
+            "Stance (melee), eight mod slots, Exilus, Arcane, and external buffs.",
         ),
         rx.box(
-            rx.box(
-                *[upgrade_slot(index) for index in UPGRADE_DISPLAY_ORDER],
-                class_name="slot-grid",
-            ),
+            rx.cond(CalculatorState.melee_weapon, melee_upgrade_grid(), ranged_upgrade_grid()),
             class_name="slot-grid-scroll",
             width="100%",
         ),
@@ -917,6 +998,13 @@ def optimizer_exclusion_editor(title: str, description: str, options, pending, s
 def optimizer_run_controls() -> rx.Component:
     disabled = CalculatorState.no_weapon | CalculatorState.optimize_running
     return rx.vstack(
+        select_control(
+            "Maximize",
+            CalculatorState.optimize_maximize_options,
+            CalculatorState.optimize_maximize_target,
+            CalculatorState.set_optimize_maximize_target,
+            disabled=disabled,
+        ),
         rx.hstack(
             rx.checkbox(
                 checked=CalculatorState.optimize_find_riven,
@@ -962,7 +1050,7 @@ def optimizer_run_controls() -> rx.Component:
             ),
         ),
         rx.cond(CalculatorState.optimize_status != "", rx.text(CalculatorState.optimize_status, class_name="empty-text")),
-        rx.cond(CalculatorState.optimize_best_dps != "", rx.text("Best DPS: ", CalculatorState.optimize_best_dps, class_name="preview-value")),
+        rx.cond(CalculatorState.optimize_best_dps != "", rx.text("Best ", CalculatorState.optimize_maximize_target, ": ", CalculatorState.optimize_best_dps, class_name="preview-value")),
         width="100%",
         gap="3",
         align="start",
@@ -995,7 +1083,13 @@ def optimizer_section() -> rx.Component:
                         rx.vstack(
                             rx.text("Current build rules", class_name="optimizer-group-title"),
                             rx.text("Discard lets the optimizer replace an upgrade. Keep may move it; keep in slot locks its position.", class_name="optimizer-help"),
-                            rx.vstack(*[optimizer_rule_row(index) for index in UPGRADE_DISPLAY_ORDER], width="100%", gap="0", class_name="optimizer-rule-list"),
+                            rx.vstack(
+                                rx.cond(CalculatorState.stance_slot_available, optimizer_rule_row(STANCE_SLOT_INDEX), rx.fragment()),
+                                *[optimizer_rule_row(index) for index in OPTIMIZER_SLOT_ORDER if index != STANCE_SLOT_INDEX],
+                                width="100%",
+                                gap="0",
+                                class_name="optimizer-rule-list",
+                            ),
                             width="100%",
                             align="start",
                             gap="3",

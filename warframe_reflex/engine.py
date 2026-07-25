@@ -211,7 +211,12 @@ def weapon_payload(weapon_type_name: str, base_stats: dict, *, name: str = "") -
 
 
 def is_non_empty_upgrade(item: Upgrade) -> bool:
-    return bool(item.data.stats)
+    if item.data.stats:
+        return True
+    combos = getattr(item.data, "combos", None)
+    if combos is not None and len(combos) > 0:
+        return True
+    return bool((item.data.compatibility or {}).get("stance"))
 
 
 def format_stat_value(
@@ -359,6 +364,21 @@ def progenitor_upgrade(element: str, value: float, no_effect: str) -> Upgrade:
     )
 
 
+def stance_combo_rows(combos: Mapping[str, object] | None) -> list[DisplayRow]:
+    rows: list[DisplayRow] = []
+    for key, raw in (combos or {}).items():
+        combo = raw if isinstance(raw, Mapping) else {}
+        name = str(combo.get("name") or key.replace("_", " ").title())
+        multiplier = float(combo.get("multiplier") or 1.0)
+        hits = float(combo.get("hits") or 0.0)
+        duration = float(combo.get("duration") or 0.0)
+        detail = f"x{multiplier:g} · {hits:g} hits"
+        if duration > 0:
+            detail = f"{detail} / {duration:g}s"
+        rows.append(DisplayRow(name, detail))
+    return rows
+
+
 def configured_weapon(
     weapon_type_name: str,
     selected_weapon_name: str,
@@ -369,6 +389,7 @@ def configured_weapon(
     custom_entry: str | None = None,
     selected_mode: str | None = None,
     evolutions: dict[int, int] | None = None,
+    stance_combo: str | None = None,
 ):
     weapon_type = WEAPON_TYPES[weapon_type_name]
     if custom_weapon:
@@ -411,6 +432,8 @@ def configured_weapon(
         )
     if evolutions:
         context["evolutions"] = evolutions
+    if stance_combo:
+        context["stance_combo"] = stance_combo
     weapon.configure(Build(*upgrades), context=context or None)
     return weapon
 

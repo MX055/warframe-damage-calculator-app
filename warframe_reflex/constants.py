@@ -252,16 +252,40 @@ UPGRADE_BOOL_FIELDS = (
     "multishot_lock",
 )
 
-# The order matches the original Streamlit 5 x 2 grid.
+# Build order: stance (melee), mods 1-8, exilus, arcane. Layout is separate.
 SLOT_CONFIGS = (
-    {"label": "Mod 1", "kind": "mod", "exilus": False, "options": MOD_FIELD},
-    {"label": "Mod 2", "kind": "mod", "exilus": False, "options": MOD_FIELD},
-    {"label": "Mod 3", "kind": "mod", "exilus": False, "options": MOD_FIELD},
-    {"label": "Mod 4", "kind": "mod", "exilus": False, "options": MOD_FIELD},
-    {"label": "Mod 5", "kind": "mod", "exilus": False, "options": MOD_FIELD},
-    {"label": "Mod 6", "kind": "mod", "exilus": False, "options": MOD_FIELD},
-    {"label": "Mod 7", "kind": "mod", "exilus": False, "options": MOD_FIELD},
-    {"label": "Mod 8", "kind": "mod", "exilus": False, "options": MOD_FIELD},
-    {"label": "Exilus", "kind": "mod", "exilus": True, "options": MOD_FIELD},
-    {"label": "Arcane", "kind": "arcane", "exilus": False, "options": ARCANE_FIELD},
+    {"label": "Stance", "kind": "mod", "exilus": False, "stance": True, "options": MOD_FIELD},
+    {"label": "Mod 1", "kind": "mod", "exilus": False, "stance": False, "options": MOD_FIELD},
+    {"label": "Mod 2", "kind": "mod", "exilus": False, "stance": False, "options": MOD_FIELD},
+    {"label": "Mod 3", "kind": "mod", "exilus": False, "stance": False, "options": MOD_FIELD},
+    {"label": "Mod 4", "kind": "mod", "exilus": False, "stance": False, "options": MOD_FIELD},
+    {"label": "Mod 5", "kind": "mod", "exilus": False, "stance": False, "options": MOD_FIELD},
+    {"label": "Mod 6", "kind": "mod", "exilus": False, "stance": False, "options": MOD_FIELD},
+    {"label": "Mod 7", "kind": "mod", "exilus": False, "stance": False, "options": MOD_FIELD},
+    {"label": "Mod 8", "kind": "mod", "exilus": False, "stance": False, "options": MOD_FIELD},
+    {"label": "Exilus", "kind": "mod", "exilus": True, "stance": False, "options": MOD_FIELD},
+    {"label": "Arcane", "kind": "arcane", "exilus": False, "stance": False, "options": ARCANE_FIELD},
 )
+STANCE_SLOT_INDEX = 0
+MOD_SLOT_INDICES = tuple(index for index, config in enumerate(SLOT_CONFIGS) if config["kind"] == "mod" and not config["exilus"] and not config["stance"])
+EXILUS_SLOT_INDEX = next(index for index, config in enumerate(SLOT_CONFIGS) if config["exilus"])
+ARCANE_SLOT_INDEX = next(index for index, config in enumerate(SLOT_CONFIGS) if config["kind"] == "arcane")
+OPTIMIZER_SLOT_ORDER = (STANCE_SLOT_INDEX, *MOD_SLOT_INDICES, EXILUS_SLOT_INDEX, ARCANE_SLOT_INDEX)
+
+# Labels match result metric cards; values are AverageStats attributes.
+OPTIMIZE_MAXIMIZE_TARGETS = {
+    "Total DPS": "total_dps",
+    "Flat DPS": "flat_dps",
+    "Flat DOTPS": "flat_dotps",
+    "Total DPH": "total_dph",
+    "Flat DPH": "flat_dph",
+    "Flat DOTPH": "flat_dotph",
+    "Total Weakpoint DPS": "total_weakpoint_dps",
+    "Flat Weakpoint DPS": "flat_weakpoint_dps",
+    "Flat Weakpoint DOTPS": "flat_weakpoint_dotps",
+    "Total Weakpoint DPH": "total_weakpoint_dph",
+    "Flat Weakpoint DPH": "flat_weakpoint_dph",
+    "Flat Weakpoint DOTPH": "flat_weakpoint_dotph",
+}
+OPTIMIZE_MAXIMIZE_OPTIONS = tuple(OPTIMIZE_MAXIMIZE_TARGETS)
+DEFAULT_OPTIMIZE_MAXIMIZE = "Total DPS"

@@ -92,14 +92,33 @@ body {
   overflow-x: visible;
 }
 
+.slot-grid-stack {
+  width: 100%;
+}
+
 .slot-grid {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-  grid-template-rows: repeat(2, auto);
-  grid-auto-flow: row;
   width: 100%;
   gap: 12px;
   align-items: start;
+}
+
+.slot-grid-top-ranged {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.slot-grid-top-melee {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
+.slot-grid-mods {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-rows: repeat(2, auto);
+}
+
+.slot-spacer {
+  min-width: 0;
+  pointer-events: none;
 }
 
 .metric-grid-scroll {
@@ -306,19 +325,17 @@ body {
   .panel, .slot-card, .metric-card { border-radius: 12px; }
   .panel { padding: 0.8rem; }
 
-  .slot-grid {
+  .slot-grid-top-ranged,
+  .slot-grid-top-melee,
+  .slot-grid-mods {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: none;
     gap: 10px;
   }
 
-  /* Keep the eight normal mods first, followed by Exilus and then Arcane. */
-  .slot-grid > :nth-child(5) { order: 10; }
-  .slot-grid > :nth-child(6) { order: 5; }
-  .slot-grid > :nth-child(7) { order: 6; }
-  .slot-grid > :nth-child(8) { order: 7; }
-  .slot-grid > :nth-child(9) { order: 8; }
-  .slot-grid > :nth-child(10) { order: 9; }
+  .slot-spacer {
+    display: none;
+  }
 
   .metric-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));

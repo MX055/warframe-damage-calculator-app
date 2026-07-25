@@ -8,8 +8,20 @@ from pathlib import Path
 
 import warframe_damage_calculator
 from warframe_damage_calculator import Upgrade, arsenal
+from warframe_damage_calculator.utils.constants import HEAVY_ATTACK_CATEGORIES, SLIDE_ATTACK_CATEGORIES
 
 from .constants import WEAPON_CATEGORY_TYPES, WEAPON_COMPATIBILITY_FAMILIES, WEAPON_TYPES
+
+ATTACK_BOUND_STANCE_COMBOS = frozenset({"heavy", "slide", "slam"})
+FREE_STANCE_COMBO_OPTIONS = (
+    "neutral",
+    "forward",
+    "forward_block",
+    "block",
+    "aerial",
+    "wall",
+    "finisher",
+)
 
 AUTOMATIC_CONDITIONS = {
     "primary", "rifle", "bow", "shotgun", "sniper", "secondary", "pistol",
@@ -174,11 +186,37 @@ def selected_attack_is_aoe(selected_weapon_name: str | None, selected_mode: str 
     return bool(_selected_attack(metadata, selected_mode).get("aoe", False))
 
 
-def weapon_compatibility_terms(weapon_category: str, selected_weapon_name: str | None = None) -> set[str]:
+def selected_attack_category(selected_weapon_name: str | None, selected_mode: str | None, *, custom_metadata: dict | None = None) -> str:
+    metadata = custom_metadata if custom_metadata is not None else raw_weapon_metadata("", selected_weapon_name)
+    return str(_selected_attack(metadata, selected_mode).get("category") or "normal")
+
+
+def stance_combo_key_for_attack_category(category: str) -> str | None:
+    if category in HEAVY_ATTACK_CATEGORIES:
+        return "heavy"
+    if category in SLIDE_ATTACK_CATEGORIES:
+        return "slide"
+    if category == "slam":
+        return "slam"
+    return None
+
+
+def stance_combo_options_for_attack(category: str) -> list[str]:
+    """Combo choices for an attack category, independent of the equipped stance."""
+    bound = stance_combo_key_for_attack_category(category)
+    if bound is not None:
+        return [bound]
+    return list(FREE_STANCE_COMBO_OPTIONS)
+
+
+def weapon_compatibility_terms(weapon_category: str, selected_weapon_name: str | None = None, *, custom_metadata: dict | None = None) -> set[str]:
     terms = set(WEAPON_COMPATIBILITY_FAMILIES[weapon_category])
-    if selected_weapon_name and normalized_database_key(selected_weapon_name) not in {"custom", "none"}:
+    metadata = custom_metadata
+    if metadata is None and selected_weapon_name and normalized_database_key(selected_weapon_name) not in {"custom", "none"}:
         metadata = raw_weapon_metadata(WEAPON_CATEGORY_TYPES[weapon_category], selected_weapon_name)
+    if selected_weapon_name and normalized_database_key(selected_weapon_name) not in {"custom", "none"}:
         terms.add(normalized_database_key(selected_weapon_name))
+    if metadata:
         for value in (metadata.get("type"), metadata.get("subtype")):
             if value:
                 terms.add(normalized_database_key(value))
@@ -208,7 +246,7 @@ def upgrade_matches_weapon_type(metadata: dict, weapon_category: str, *, selecte
         for key in ("types", "subtypes", "names")
         for item in compatibility.get(key, [])
     }
-    if allowed and not (allowed & weapon_compatibility_terms(weapon_category, selected_weapon_name)):
+    if allowed and not (allowed & weapon_compatibility_terms(weapon_category, selected_weapon_name, custom_metadata=custom_metadata)):
         return False
     has_aoe_rule = "aoe" in compatibility
     has_trigger_rule = bool(compatibility.get("triggers"))
@@ -247,20 +285,97 @@ def weapon_names_for_type(weapon_type_name: str, weapon_category: str | None = N
     ))
 
 
+def _weapon_flag_metadata(weapon_name: str | None, *, custom_metadata: dict | None = None) -> dict | None:
+    if custom_metadata is not None:
+        return custom_metadata
+    if not weapon_name or normalized_database_key(weapon_name) in {"custom", "none"}:
+        return None
+    return raw_weapon_metadata("", weapon_name)
+
+
+def weapon_is_exalted(weapon_name: str | None, *, custom_metadata: dict | None = None) -> bool:
+    """True for exalted weapons that use a fixed exclusive stance."""
+    metadata = _weapon_flag_metadata(weapon_name, custom_metadata=custom_metadata)
+    return bool(metadata and metadata.get("exalted"))
+
+
+def weapon_is_pseudo_exalted(weapon_name: str | None, *, custom_metadata: dict | None = None) -> bool:
+    """True for pseudo-exalted weapons that do not use stance mods."""
+    metadata = _weapon_flag_metadata(weapon_name, custom_metadata=custom_metadata)
+    return bool(metadata and metadata.get("pseudo_exalted"))
+
+
+def weapon_is_companion(weapon_name: str | None, *, custom_metadata: dict | None = None) -> bool:
+    """True for companion weapons that do not use stance mods or stance combos."""
+    metadata = _weapon_flag_metadata(weapon_name, custom_metadata=custom_metadata)
+    return bool(metadata and metadata.get("companion"))
+
+
+def weapon_allows_stance(weapon_name: str | None, *, custom_metadata: dict | None = None) -> bool:
+    """False for pseudo-exalted and companion weapons."""
+    return not weapon_is_pseudo_exalted(weapon_name, custom_metadata=custom_metadata) and not weapon_is_companion(weapon_name, custom_metadata=custom_metadata)
+
+
 @lru_cache(maxsize=None)
-def upgrade_names_for_ui(weapon_category: str, selected_weapon_name: str | None, selected_mode: str | None, include_mods: bool, include_arcanes: bool, exilus_only: bool) -> tuple[str, ...]:
+def weapon_exclusive_stance_names(weapon_name: str | None) -> tuple[str, ...]:
+    """Stances locked to an exalted weapon via compatibility.names."""
+    if not weapon_name or normalized_database_key(weapon_name) in {"custom", "none"}:
+        return ()
+    if not weapon_is_exalted(weapon_name) or not weapon_allows_stance(weapon_name):
+        return ()
+    wanted = normalized_database_key(weapon_name)
+    names = [
+        name
+        for name, metadata in raw_upgrades_database().items()
+        if bool((metadata.get("compatibility") or {}).get("stance"))
+        and wanted in {normalized_database_key(item) for item in ((metadata.get("compatibility") or {}).get("names") or [])}
+    ]
+    return tuple(sorted(names, key=str.casefold))
+
+
+def preferred_exclusive_stance(weapon_name: str | None, exclusive: tuple[str, ...] | list[str]) -> str:
+    if not exclusive:
+        return ""
+    if weapon_name:
+        wanted = normalized_database_key(weapon_name)
+        for name in exclusive:
+            if normalized_database_key(name) == wanted:
+                return name
+    return exclusive[0]
+
+
+def _upgrade_names_for_ui(weapon_category: str, selected_weapon_name: str | None, selected_mode: str | None, include_mods: bool, include_arcanes: bool, exilus_only: bool, stance_only: bool = False, custom_metadata: dict | None = None) -> tuple[str, ...]:
+    if stance_only and not weapon_allows_stance(selected_weapon_name, custom_metadata=custom_metadata):
+        return ()
+    exclusive_stances = weapon_exclusive_stance_names(selected_weapon_name) if stance_only and weapon_is_exalted(selected_weapon_name, custom_metadata=custom_metadata) else ()
     names = []
     for name, metadata in raw_upgrades_database().items():
         kind = metadata.get("type")
         if not ((include_mods and kind == "mod") or (include_arcanes and kind == "arcane")):
             continue
-        is_exilus = bool((metadata.get("compatibility") or {}).get("exilus", False))
+        compatibility = metadata.get("compatibility") or {}
+        is_stance = bool(compatibility.get("stance", False))
+        is_exilus = bool(compatibility.get("exilus", False))
+        if stance_only:
+            if not is_stance:
+                continue
+            if exclusive_stances:
+                if name in exclusive_stances:
+                    names.append(name)
+                continue
+        elif is_stance:
+            continue
         if kind == "mod" and exilus_only and not is_exilus:
             continue
-        matches_weapon = arcane_matches_weapon_slot(name, weapon_category) if kind == "arcane" else upgrade_matches_weapon_type(metadata, weapon_category, selected_weapon_name=selected_weapon_name, selected_mode=selected_mode)
+        matches_weapon = arcane_matches_weapon_slot(name, weapon_category) if kind == "arcane" else upgrade_matches_weapon_type(metadata, weapon_category, selected_weapon_name=selected_weapon_name, selected_mode=selected_mode, custom_metadata=custom_metadata)
         if matches_weapon:
             names.append(name)
     return tuple(sorted(names, key=str.casefold))
+
+
+@lru_cache(maxsize=None)
+def upgrade_names_for_ui(weapon_category: str, selected_weapon_name: str | None, selected_mode: str | None, include_mods: bool, include_arcanes: bool, exilus_only: bool, stance_only: bool = False) -> tuple[str, ...]:
+    return _upgrade_names_for_ui(weapon_category, selected_weapon_name, selected_mode, include_mods, include_arcanes, exilus_only, stance_only=stance_only)
 
 
 @lru_cache(maxsize=None)
@@ -295,8 +410,11 @@ def database_upgrade(upgrade_name: str, *, kind: str | None = None, rank: int | 
 def database_rank_bounds(upgrade_name: str | None = None, *, is_arcane_slot: bool) -> tuple[int, int]:
     metadata = raw_upgrade_metadata(upgrade_name or "", kind="arcane" if is_arcane_slot else "mod")
     default = 5 if is_arcane_slot else 10
+    raw_max_rank = metadata.get("max_rank")
+    if raw_max_rank is None and bool((metadata.get("compatibility") or {}).get("stance", False)):
+        return 0, 0
     try:
-        return 0, max(0, int(metadata.get("max_rank", default)))
+        return 0, max(0, int(default if raw_max_rank is None else raw_max_rank))
     except (TypeError, ValueError):
         return 0, default
 
