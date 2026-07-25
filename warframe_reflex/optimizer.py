@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import itertools
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Iterable
@@ -7,6 +8,7 @@ from typing import Iterable
 from warframe_damage_calculator import Build, Upgrade
 
 from .constants import (
+    BALANCED_MAXIMIZE_TARGETS,
     DEFAULT_OPTIMIZE_MAXIMIZE,
     NO_EFFECT,
     OPTIMIZE_MAXIMIZE_TARGETS,
@@ -26,6 +28,7 @@ from .data import (
     raw_upgrade_metadata,
     upgrade_conflicts_with_selected,
     upgrade_names_for_ui,
+    weapon_evolution_perk_choices,
 )
 from .engine import build_upgrade, configured_weapon, custom_upgrade_from_entry, is_non_empty_upgrade, parse_database_entry, progenitor_upgrade
 
@@ -52,6 +55,16 @@ HILL_CLIMB_SWAP_LIMIT = 60
 ProgressCallback = Callable[[str, float, int, float | None], None]  # phase, fraction 0-1, evaluations, best_score
 MAXIMIZE_TARGET_ATTRS = frozenset(OPTIMIZE_MAXIMIZE_TARGETS.values())
 MAXIMIZE_TARGET_LABELS = {attr: label for label, attr in OPTIMIZE_MAXIMIZE_TARGETS.items()}
+
+
+def score_maximize_target(final, maximize_target: str) -> float:
+    """Score a resolved final-stats object for the selected maximize target."""
+    pair = BALANCED_MAXIMIZE_TARGETS.get(maximize_target)
+    if pair is not None:
+        left = max(float(getattr(final, pair[0], 0) or 0), 0.0)
+        right = max(float(getattr(final, pair[1], 0) or 0), 0.0)
+        return (left * right) ** 0.5
+    return float(getattr(final, maximize_target))
 
 
 @dataclass
@@ -84,6 +97,7 @@ class OptimizeRequest:
     external_fields: dict[str, float]
     slots: list[SlotSpec]
     find_optimal_riven: bool
+    find_optimal_evolutions: bool = False
     maximize_target: str = OPTIMIZE_MAXIMIZE_TARGETS[DEFAULT_OPTIMIZE_MAXIMIZE]
     stance_combo: str = "neutral"
     excluded_upgrades: set[str] = field(default_factory=set)
@@ -105,6 +119,8 @@ class OptimizeResult:
     total_dps: float
     evaluations: int
     message: str
+    evolutions: dict[int, int] = field(default_factory=dict)
+    evolutions_optimized: bool = False
 
 
 def riven_field_limits(base_stats: dict[str, float], disposition: float, roll_name: str, field_name: str, negative: bool, non_negative: Iterable[str]) -> tuple[float, float] | None:
@@ -213,6 +229,7 @@ def optimize_build(request: OptimizeRequest, progress: ProgressCallback | None =
     upgrade_cache: dict[tuple[str, str, int, int, bool], Upgrade] = {}
     runtime_cache: dict[tuple[str, str], tuple[int, int]] = {}
     score_cache: dict[tuple, float] = {}
+    current_evolutions = dict(request.evolutions or {})
 
     def max_runtime(name: str, kind: str) -> tuple[int, int]:
         key = name, kind
@@ -264,6 +281,7 @@ def optimize_build(request: OptimizeRequest, progress: ProgressCallback | None =
         key = (
             tuple(names), tuple(ranks), tuple(stacks_list), tuple(rolls),
             tuple(tuple(sorted(fields.items())) for fields in riven_fields), tuple(customs),
+            tuple(sorted(current_evolutions.items())),
         )
         if key in score_cache:
             return score_cache[key]
@@ -277,8 +295,9 @@ def optimize_build(request: OptimizeRequest, progress: ProgressCallback | None =
         optimizer_build.upgrades = upgrades
         if request.weapon_type == "Melee":
             optimizer_weapon.data.runtime.stance_combo = stance_combo
+        optimizer_weapon.data.runtime.evolutions = dict(current_evolutions)
         optimizer_weapon.results.resolve(validate_cycles=False)
-        result = float(getattr(optimizer_weapon.results.main.final, maximize_target))
+        result = score_maximize_target(optimizer_weapon.results.main.final, maximize_target)
         score_cache[key] = result
         return result
 
@@ -444,7 +463,7 @@ def optimize_build(request: OptimizeRequest, progress: ProgressCallback | None =
             saved = names[target], ranks[target], stacks_list[target], dict(riven_fields[target]), rolls[target]
             n_rolls = max(len(RIVEN_ROLL_OPTIONS), 1)
             for roll_i, roll_name in enumerate(RIVEN_ROLL_OPTIONS):
-                report(f"Riven search ({roll_i + 1}/{n_rolls})", 0.80 + 0.18 * (roll_i + 1) / n_rolls, best_dps)
+                report(f"Riven search ({roll_i + 1}/{n_rolls})", 0.80 + 0.10 * (roll_i + 1) / n_rolls, best_dps)
                 pos_count, neg_count, _b, _m = RIVEN_ROLL_CONFIGS[roll_name]
                 chosen: list[tuple[str, float]] = []
                 used: set[str] = set()
@@ -497,6 +516,40 @@ def optimize_build(request: OptimizeRequest, progress: ProgressCallback | None =
                 place(target, saved[0], policy=SLOT_POLICY_DISCARD, rank=saved[1], stacks=saved[2], fields=saved[3], roll=saved[4])
                 riven_note = " Riven search found no improvement."
 
+    evolution_note = ""
+    evolutions_optimized = False
+    if request.find_optimal_evolutions:
+        custom_metadata = None
+        if request.custom_weapon:
+            try:
+                custom_metadata = parse_database_entry(request.custom_weapon_entry, default_name="Custom Weapon", default_type=request.weapon_type.casefold())
+            except ValueError:
+                custom_metadata = None
+        choices = weapon_evolution_perk_choices(None if request.custom_weapon else request.weapon_name, custom_metadata=custom_metadata)
+        if not choices:
+            evolution_note = " No Incarnon evolutions available."
+        else:
+            tiers = sorted(choices)
+            perk_lists = [choices[tier] for tier in tiers]
+            best_evolutions: dict[int, int] = {}
+            best_dps = -1.0
+            total = 1
+            for options in perk_lists:
+                total *= max(len(options), 1)
+            for combo_i, combo in enumerate(itertools.product(*perk_lists), start=1):
+                trial = {tier: perk for tier, perk in zip(tiers, combo)}
+                current_evolutions = trial
+                dps = score()
+                if dps > best_dps:
+                    best_dps, best_evolutions = dps, dict(trial)
+                if combo_i == 1 or combo_i == total or combo_i % 8 == 0:
+                    report(f"Incarnon search ({combo_i}/{total})", 0.90 + 0.08 * combo_i / max(total, 1), best_dps)
+            current_evolutions = best_evolutions
+            baseline = best_dps
+            evolutions_optimized = True
+            picks = ", ".join(f"E{tier}:P{perk}" for tier, perk in sorted(best_evolutions.items()))
+            evolution_note = f" Optimal Incarnon ({picks})."
+
     final_dps = score()
     report("Finishing…", 0.99, final_dps)
     filled = sum(1 for name in names if name != NONE)
@@ -506,5 +559,6 @@ def optimize_build(request: OptimizeRequest, progress: ProgressCallback | None =
         slot_names=names, slot_ranks=ranks, slot_stacks=stacks_list, slot_policies=policies,
         riven_rolls=rolls, riven_fields=riven_fields, custom_entries=customs,
         total_dps=final_dps, evaluations=evaluations,
-        message=f"Optimized {filled} slots | {evaluations} evaluations | {final_dps:,.1f} {maximize_label}.{riven_note}{stance_note}",
+        message=f"Optimized {filled} slots | {evaluations} evaluations | {final_dps:,.1f} {maximize_label}.{riven_note}{evolution_note}{stance_note}",
+        evolutions=dict(current_evolutions), evolutions_optimized=evolutions_optimized,
     )

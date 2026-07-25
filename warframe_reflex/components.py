@@ -531,6 +531,7 @@ def display_stat_row(row: rx.Var[DisplayRow]) -> rx.Component:
         rx.text(row.value, class_name="preview-value"),
         width="100%",
         align="center",
+        class_name="preview-stat-row",
     )
 
 
@@ -543,6 +544,18 @@ def stat_preview(rows) -> rx.Component:
             gap="1",
         ),
         rx.text("No stats.", class_name="empty-text"),
+    )
+
+
+def slot_stat_preview(rows) -> rx.Component:
+    return rx.vstack(
+        rx.cond(
+            rows.length() > 0,
+            rx.foreach(rows, display_stat_row),
+            rx.text("No stats.", class_name="empty-text preview-stat-row"),
+        ),
+        width="100%",
+        class_name="slot-stat-preview",
     )
 
 
@@ -740,7 +753,7 @@ def upgrade_slot(index: int) -> rx.Component:
                         width="100%",
                         align="center",
                     ),
-                    stat_preview(CalculatorState.slot_stat_rows[index]),
+                    slot_stat_preview(CalculatorState.slot_stat_rows[index]),
                     width="100%",
                     gap="3",
                     align="start",
@@ -1022,8 +1035,28 @@ def optimizer_run_controls() -> rx.Component:
             width="100%",
         ),
         rx.cond(
-            CalculatorState.riven_optimize_disabled,
-            rx.text("Riven search is disabled while a Riven is marked keep or keep in slot.", class_name="optimizer-warning"),
+            ~CalculatorState.riven_available,
+            rx.text("This weapon has no Riven disposition.", class_name="optimizer-warning"),
+            rx.cond(
+                CalculatorState.riven_optimize_disabled,
+                rx.text("Riven search is disabled while a Riven is marked keep or keep in slot.", class_name="optimizer-warning"),
+            ),
+        ),
+        rx.hstack(
+            rx.checkbox(
+                checked=CalculatorState.optimize_find_evolutions,
+                on_change=CalculatorState.set_optimize_find_evolutions,
+                disabled=disabled | ~CalculatorState.evolution_optimize_available,
+            ),
+            rx.vstack(
+                rx.text("Find optimal Incarnon perks", class_name="toggle-label"),
+                rx.text("Search evolution perk combinations after the upgrade build is optimized.", class_name="optimizer-help"),
+                align="start",
+                gap="1",
+            ),
+            align="start",
+            gap="2",
+            width="100%",
         ),
         rx.button(
             rx.cond(CalculatorState.optimize_running, "Optimizing…", "Optimize build"),

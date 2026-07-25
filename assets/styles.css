@@ -470,6 +470,24 @@ textarea.database-entry-input::placeholder {
   user-select: none;
 }
 
+/* Keep upgrade cards aligned to a 4-stat preview footprint. */
+.slot-stat-preview {
+  --slot-stat-row-height: 1.35rem;
+  --slot-stat-gap: 0.25rem;
+  gap: var(--slot-stat-gap) !important;
+  min-height: calc(var(--slot-stat-row-height) * 4 + var(--slot-stat-gap) * 3);
+}
+
+.slot-stat-preview .preview-stat-row {
+  min-height: var(--slot-stat-row-height);
+}
+
+.slot-stat-preview .preview-label,
+.slot-stat-preview .preview-value,
+.slot-stat-preview .empty-text {
+  line-height: var(--slot-stat-row-height);
+}
+
 .slot-editor-toggle-input:focus-visible + .slot-editor-summary {
   border-radius: 8px;
   outline: 2px solid rgba(255, 255, 255, 0.24);

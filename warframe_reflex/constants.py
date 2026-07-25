@@ -272,9 +272,10 @@ EXILUS_SLOT_INDEX = next(index for index, config in enumerate(SLOT_CONFIGS) if c
 ARCANE_SLOT_INDEX = next(index for index, config in enumerate(SLOT_CONFIGS) if config["kind"] == "arcane")
 OPTIMIZER_SLOT_ORDER = (STANCE_SLOT_INDEX, *MOD_SLOT_INDICES, EXILUS_SLOT_INDEX, ARCANE_SLOT_INDEX)
 
-# Labels match result metric cards; values are AverageStats attributes.
+# Labels match result metric cards; values are AverageStats attributes or synthetic optimizer scores.
 OPTIMIZE_MAXIMIZE_TARGETS = {
     "Total DPS": "total_dps",
+    "Balanced (DPS · DPH)": "balanced_total_dps_dph",
     "Flat DPS": "flat_dps",
     "Flat DOTPS": "flat_dotps",
     "Total DPH": "total_dph",
@@ -288,4 +289,7 @@ OPTIMIZE_MAXIMIZE_TARGETS = {
     "Flat Weakpoint DOTPH": "flat_weakpoint_dotph",
 }
 OPTIMIZE_MAXIMIZE_OPTIONS = tuple(OPTIMIZE_MAXIMIZE_TARGETS)
-DEFAULT_OPTIMIZE_MAXIMIZE = "Total DPS"
+DEFAULT_OPTIMIZE_MAXIMIZE = "Balanced (DPS · DPH)"
+BALANCED_MAXIMIZE_TARGETS = {
+    "balanced_total_dps_dph": ("total_dps", "total_dph"),
+}

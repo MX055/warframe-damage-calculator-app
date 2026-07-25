@@ -166,6 +166,27 @@ def weapon_evolution_options(weapon_name: str | None) -> list[dict]:
     return tiers
 
 
+def weapon_evolution_perk_choices(weapon_name: str | None, *, custom_metadata: dict | None = None) -> dict[int, tuple[int, ...]]:
+    """Map evolution tier -> perk ids available for search. Every tier with perks must be filled."""
+    metadata = custom_metadata if custom_metadata is not None else raw_weapon_metadata("", weapon_name)
+    evolutions = (metadata or {}).get("evolutions") or {}
+    choices: dict[int, tuple[int, ...]] = {}
+    for tier, perks in evolutions.items():
+        try:
+            tier_id = int(tier)
+        except (TypeError, ValueError):
+            continue
+        perk_ids: list[int] = []
+        for perk in perks or {}:
+            try:
+                perk_ids.append(int(perk))
+            except (TypeError, ValueError):
+                continue
+        if perk_ids:
+            choices[tier_id] = tuple(sorted(perk_ids))
+    return choices
+
+
 def _selected_attack(metadata: dict, selected_mode: str | None) -> dict:
     attacks = metadata.get("attacks") or {}
     wanted = normalized_database_key(selected_mode)
@@ -314,6 +335,20 @@ def weapon_is_companion(weapon_name: str | None, *, custom_metadata: dict | None
 def weapon_allows_stance(weapon_name: str | None, *, custom_metadata: dict | None = None) -> bool:
     """False for pseudo-exalted and companion weapons."""
     return not weapon_is_pseudo_exalted(weapon_name, custom_metadata=custom_metadata) and not weapon_is_companion(weapon_name, custom_metadata=custom_metadata)
+
+
+def weapon_has_riven_disposition(weapon_name: str | None, *, custom_metadata: dict | None = None) -> bool:
+    """True when the weapon has a positive Riven disposition."""
+    metadata = _weapon_flag_metadata(weapon_name, custom_metadata=custom_metadata)
+    if not metadata:
+        return False
+    disposition = metadata.get("disposition")
+    if disposition is None:
+        return False
+    try:
+        return float(disposition) > 0
+    except (TypeError, ValueError):
+        return False
 
 
 @lru_cache(maxsize=None)

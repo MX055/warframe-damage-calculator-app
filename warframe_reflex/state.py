@@ -54,6 +54,7 @@ from .data import (
     weapon_evolution_options,
     weapon_allows_stance,
     weapon_exclusive_stance_names,
+    weapon_has_riven_disposition,
     weapon_names_for_type,
 )
 from .optimizer import OptimizeRequest, SlotSpec, optimize_build as run_optimize_build
@@ -296,6 +297,7 @@ class CalculatorState(rx.State):
     exclusive_stance_weapon: bool = False
     stance_slot_available: bool = False
     stance_combo_available: bool = False
+    riven_available: bool = False
     slot_upgrade_options: list[list[str]] = rx.field(
         default_factory=lambda: [[NONE] for _ in SLOT_CONFIGS]
     )
@@ -384,6 +386,7 @@ class CalculatorState(rx.State):
     )
     slot_editor_open: list[bool] = rx.field(default_factory=lambda: [False for _ in SLOT_CONFIGS])
     optimize_find_riven: bool = False
+    optimize_find_evolutions: bool = False
     optimize_maximize_target: str = DEFAULT_OPTIMIZE_MAXIMIZE
     optimize_maximize_options: list[str] = rx.field(default_factory=lambda: list(OPTIMIZE_MAXIMIZE_OPTIONS))
     optimize_status: str = ""
@@ -431,10 +434,16 @@ class CalculatorState(rx.State):
 
     @rx.var
     def riven_optimize_disabled(self) -> bool:
+        if not self.riven_available:
+            return True
         return any(
             selected == RIVEN and policy in {SLOT_POLICY_KEEP, SLOT_POLICY_KEEP_IN_SLOT}
             for selected, policy in zip(self.slot_selected_upgrades, self.slot_policies)
         )
+
+    @rx.var
+    def evolution_optimize_available(self) -> bool:
+        return len(self.evolution_options) > 0
 
     @rx.var
     def ranged_weapon(self) -> bool:
@@ -774,11 +783,15 @@ class CalculatorState(rx.State):
 
     @rx.event
     def set_optimize_find_riven(self, value: bool):
-        locked = any(
+        locked = (not self.riven_available) or any(
             selected == RIVEN and policy in {SLOT_POLICY_KEEP, SLOT_POLICY_KEEP_IN_SLOT}
             for selected, policy in zip(self.slot_selected_upgrades, self.slot_policies)
         )
         self.optimize_find_riven = bool(value) and not locked
+
+    @rx.event
+    def set_optimize_find_evolutions(self, value: bool):
+        self.optimize_find_evolutions = bool(value) and bool(self.evolution_options)
 
     @rx.event
     def set_optimize_maximize_target(self, value: str):
@@ -838,7 +851,8 @@ class CalculatorState(rx.State):
                     )
                     for index, config in enumerate(SLOT_CONFIGS)
                 ],
-                find_optimal_riven=bool(self.optimize_find_riven) and not riven_locked,
+                find_optimal_riven=bool(self.optimize_find_riven) and not riven_locked and self.riven_available,
+                find_optimal_evolutions=bool(self.optimize_find_evolutions) and bool(self.evolution_options),
                 maximize_target=OPTIMIZE_MAXIMIZE_TARGETS.get(self.optimize_maximize_target, OPTIMIZE_MAXIMIZE_TARGETS[DEFAULT_OPTIMIZE_MAXIMIZE]),
                 stance_combo=self.selected_stance_combo if self.stance_combo_available else "neutral",
                 excluded_upgrades=set(self.optimize_excluded_upgrades),
@@ -1177,6 +1191,8 @@ class CalculatorState(rx.State):
                 else "None"
                 for index, tier in enumerate(tiers)
             ]
+            if not tiers:
+                self.optimize_find_evolutions = False
             return
         modes = list(weapon_attack_modes(self.selected_weapon))
         self.attack_mode_options = modes
@@ -1186,6 +1202,8 @@ class CalculatorState(rx.State):
         self.evolution_labels = [tier["label"] for tier in tiers]
         self.evolution_options = [tier["options"] for tier in tiers]
         self.evolution_selections = ["None" for _ in tiers]
+        if not tiers:
+            self.optimize_find_evolutions = False
 
     def _clear_slot(self, index: int, *, reset_policy: bool = True):
         selected = list(self.slot_selected_upgrades)
@@ -1234,6 +1252,19 @@ class CalculatorState(rx.State):
             else:
                 all_fields[index] = []
         self.slot_max_ranks, self.slot_max_stacks, self.slot_fields = max_ranks, max_stacks, all_fields
+        if result.evolutions_optimized:
+            selected = []
+            for index, label in enumerate(self.evolution_labels):
+                tier = parse_int(label.rsplit(" ", 1)[-1])
+                perk = result.evolutions.get(tier)
+                options = self.evolution_options[index] if index < len(self.evolution_options) else ["None"]
+                if perk is None:
+                    selected.append("None")
+                    continue
+                prefix = f"Perk {perk}"
+                match = next((option for option in options if option == prefix or option.startswith(f"{prefix} —") or option.startswith(f"{prefix} -")), "None")
+                selected.append(match)
+            self.evolution_selections = selected
         previous_combo = self.selected_stance_combo
         self._refresh_stance_combo_options()
         if previous_combo in self.stance_combo_options:
@@ -1274,8 +1305,11 @@ class CalculatorState(rx.State):
                 stance_only,
             )
 
-        self.mod_options = [NONE, CUSTOM, RIVEN, *upgrade_names(True, False, False)]
         has_weapon = self.selected_weapon != NONE
+        self.riven_available = has_weapon and weapon_has_riven_disposition(weapon_name, custom_metadata=custom_metadata)
+        if not self.riven_available:
+            self.optimize_find_riven = False
+        self.mod_options = [NONE, CUSTOM, *([RIVEN] if self.riven_available else []), *upgrade_names(True, False, False)]
         exclusive_stances = weapon_exclusive_stance_names(weapon_name) if self.selected_weapon_type == "Melee" and weapon_name else ()
         allows_stance = self.selected_weapon_type == "Melee" and has_weapon and weapon_allows_stance(weapon_name, custom_metadata=custom_metadata)
         self.exclusive_stance_weapon = bool(exclusive_stances)
@@ -1759,9 +1793,15 @@ class CalculatorState(rx.State):
             rows.append(DisplayRow(field.label, formatted))
         return rows
 
+    def _pad_slot_preview_rows(self, rows: list[DisplayRow], *, minimum: int = 4) -> list[DisplayRow]:
+        padded = list(rows) if rows else [DisplayRow("No stats.", "")]
+        while len(padded) < minimum:
+            padded.append(DisplayRow("\u00a0", "\u00a0"))
+        return padded
+
     def _slot_preview_rows(self, index: int, upgrade: Upgrade) -> list[DisplayRow]:
         if self.slot_selected_upgrades[index] == RIVEN:
-            return self._riven_stat_rows(index)
+            return self._pad_slot_preview_rows(self._riven_stat_rows(index))
         rows = upgrade_stat_rows(upgrade, self._slot_extra_preview_stats(index))
         if SLOT_CONFIGS[index].get("stance") or bool((upgrade.data.compatibility or {}).get("stance")):
             combos = getattr(upgrade.data, "combos", None)
@@ -1774,8 +1814,8 @@ class CalculatorState(rx.State):
                 combo_mapping = {fallback: combo_mapping[fallback]}
             combo_rows = stance_combo_rows(combo_mapping)
             if combo_rows:
-                return [*rows, *combo_rows] if rows else combo_rows
-        return rows
+                rows = [*rows, *combo_rows] if rows else combo_rows
+        return self._pad_slot_preview_rows(rows)
 
     def _slot_stance_combos(self, index: int) -> dict:
         selected = self.slot_selected_upgrades[index]
