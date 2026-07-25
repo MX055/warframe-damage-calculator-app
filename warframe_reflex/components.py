@@ -925,7 +925,7 @@ def optimizer_policy_select(index: int) -> rx.Component:
         rx.select.content(
             rx.select.group(
                 rx.select.item("Replace", value=SLOT_POLICY_DISCARD),
-                rx.select.item("Keep, any compatible slot", value=SLOT_POLICY_KEEP),
+                rx.select.item("Keep in this build", value=SLOT_POLICY_KEEP),
                 rx.select.item("Keep in this slot", value=SLOT_POLICY_KEEP_IN_SLOT),
             ),
             position="popper",
