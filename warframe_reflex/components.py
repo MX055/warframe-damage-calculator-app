@@ -1065,7 +1065,7 @@ def optimizer_run_controls() -> rx.Component:
             ),
             rx.vstack(
                 rx.text("Find optimal Incarnon perks", class_name="toggle-label"),
-                rx.text("Search evolution perk combinations after the upgrade build is optimized.", class_name="optimizer-help"),
+                rx.text("Jointly optimize Incarnon perks with the mod build (they depend on each other).", class_name="optimizer-help"),
                 align="start",
                 gap="1",
             ),

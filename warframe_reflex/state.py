@@ -221,10 +221,10 @@ def _custom_upgrade_templates(
             "max_rank": 10 if config["kind"] == "mod" else 5,
             "stats": {
                 "damage_bonus": [
-                    {"value": 1.65, "mode": "additive"},
+                    {"value": 1.65, "mode": "proportional"},
                     {
                         "value": 0.15,
-                        "mode": "multiplicative",
+                        "mode": "base",
                         "when": "on_headshot",
                     },
                 ],
@@ -232,7 +232,7 @@ def _custom_upgrade_templates(
                 "crit_damage": [
                     {
                         "value": 0.1,
-                        "mode": "additive",
+                        "mode": "proportional",
                         "stacks": {"when": "stacks", "max": 5},
                     }
                 ],

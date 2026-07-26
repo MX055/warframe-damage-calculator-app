@@ -75,22 +75,38 @@ def is_field_allowed(field_name: str, weapon_type_name: str, rules: dict) -> boo
     return allowed_weapon_types is None or weapon_type_name in allowed_weapon_types
 
 
+LEGACY_EFFECT_MODES = {"additive": "proportional", "multiplicative": "base"}
+
+
+def normalize_effect_mode(mode: object | None) -> str:
+    if mode is None or mode == "":
+        return "proportional"
+    text = str(mode)
+    return LEGACY_EFFECT_MODES.get(text, text)
+
+
+def _normalize_effect_modes_in_stats(stats: object) -> None:
+    if not isinstance(stats, dict):
+        return
+    for effects in stats.values():
+        for effect in effects if isinstance(effects, list) else [effects]:
+            if isinstance(effect, dict) and "mode" in effect:
+                effect["mode"] = normalize_effect_mode(effect.get("mode"))
+
+
 def build_upgrade(name: str, values: dict[str, float | int]) -> Upgrade:
     mode_fields = {
-        "base_damage": ("damage_bonus", "additive"),
-        "multiplicative_base_damage": ("damage_bonus", "multiplicative"),
+        "base_damage": ("damage_bonus", "proportional"),
+        "multiplicative_base_damage": ("damage_bonus", "base"),
         "flat_crit_chance": ("crit_chance", "flat"),
-        "multiplicative_crit_chance": ("crit_chance", "multiplicative"),
+        "multiplicative_crit_chance": ("crit_chance", "base"),
         "flat_crit_damage": ("crit_damage", "flat"),
-        "multiplicative_fire_rate": ("fire_rate", "multiplicative"),
-        "multiplicative_weakpoint_crit_chance": (
-            "weakpoint_crit_chance",
-            "multiplicative",
-        ),
+        "multiplicative_fire_rate": ("fire_rate", "base"),
+        "multiplicative_weakpoint_crit_chance": ("weakpoint_crit_chance", "base"),
     }
     stats: dict[str, object] = {}
 
-    def add_effect(stat: str, value: float | int | bool, mode: str = "additive"):
+    def add_effect(stat: str, value: float | int | bool, mode: str = "proportional"):
         if value == 0 or value is False:
             return
         effect = {"value": value, "mode": mode}
@@ -104,7 +120,7 @@ def build_upgrade(name: str, values: dict[str, float | int]) -> Upgrade:
         value = values.get(field_name, 0)
         if field_name == "secondary_enervate":
             value = int(value)
-        stat, mode = mode_fields.get(field_name, (field_name, "additive"))
+        stat, mode = mode_fields.get(field_name, (field_name, "proportional"))
         add_effect(stat, value, mode)
     for field_name in UPGRADE_BOOL_FIELDS:
         add_effect(field_name, bool(values.get(field_name, False)))
@@ -141,6 +157,15 @@ def parse_database_entry(
             entry.setdefault("name", wrapped_name)
     entry.setdefault("name", default_name)
     entry.setdefault("type", default_type)
+    _normalize_effect_modes_in_stats(entry.get("stats"))
+    evolutions = entry.get("evolutions")
+    if isinstance(evolutions, dict):
+        for perks in evolutions.values():
+            if not isinstance(perks, dict):
+                continue
+            for perk in perks.values():
+                if isinstance(perk, dict):
+                    _normalize_effect_modes_in_stats(perk.get("stats"))
     return entry
 
 
@@ -274,8 +299,8 @@ def upgrade_stat_rows(
                 condition = stacks_on or raw_effect.get("when")
                 required_rank = raw_effect.get("rank")
                 qualifiers = []
-                mode = raw_effect.get("mode", "additive")
-                if mode != "additive":
+                mode = normalize_effect_mode(raw_effect.get("mode"))
+                if mode != "proportional":
                     qualifiers.append(str(mode))
                 if required_rank is not None:
                     qualifiers.append(f"rank {required_rank}")
@@ -321,8 +346,8 @@ def upgrade_stat_rows(
                 continue
             qualifiers: list[str] = []
             if isinstance(raw_effect, Mapping):
-                mode = raw_effect.get("mode", "additive")
-                if mode != "additive":
+                mode = normalize_effect_mode(raw_effect.get("mode"))
+                if mode != "proportional":
                     qualifiers.append(str(mode))
                 condition = raw_effect.get("when")
                 stacks = raw_effect.get("stacks")
@@ -359,7 +384,7 @@ def progenitor_upgrade(element: str, value: float, no_effect: str) -> Upgrade:
         {
             "name": "Progenitor",
             "type": "progenitor",
-            "stats": {element: [{"value": value, "mode": "additive"}]},
+            "stats": {element: [{"value": value, "mode": "proportional"}]},
         }
     )
 

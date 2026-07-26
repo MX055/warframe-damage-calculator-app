@@ -51,6 +51,7 @@ CANDIDATE_SHORTLIST_LIMIT = 24
 CANDIDATE_PER_STAT_LIMIT = 2
 CANDIDATE_RAW_STAT_LIMIT = 2
 HILL_CLIMB_SWAP_LIMIT = 60
+EVOLUTION_REFINE_HILL_LIMIT = 40
 
 ProgressCallback = Callable[[str, float, int, float | None], None]  # phase, fraction 0-1, evaluations, best_score
 MAXIMIZE_TARGET_ATTRS = frozenset(OPTIMIZE_MAXIMIZE_TARGETS.values())
@@ -396,130 +397,60 @@ def optimize_build(request: OptimizeRequest, progress: ProgressCallback | None =
     stance_pool = shortlist(stance_pool, pool_groups[1][1])
     exilus_pool = shortlist(exilus_pool, pool_groups[2][1])
     arcane_pool = shortlist(arcane_pool, pool_groups[3][1])
-    report("Candidates ready", 0.15, baseline)
+    report("Candidates ready", 0.12, baseline)
 
-    # 3) Greedy fill open slots by best ΔDPS.
-    n_open = max(len(open_slots), 1)
-    for fill_i, index in enumerate(open_slots):
-        best_name, best_dps, best_rank, best_stacks = names[index], baseline, ranks[index], stacks_list[index]
-        prev = names[index], ranks[index], stacks_list[index], dict(riven_fields[index]), rolls[index], customs[index]
-        # Also try leaving empty / keeping current.
-        for candidate in pool_for(index):
-            if not legal(candidate, index):
-                continue
-            max_rank, max_stacks = max_runtime(candidate, slots[index].kind)
-            place(index, candidate, policy=SLOT_POLICY_DISCARD, rank=max_rank, stacks=max_stacks, fields={}, custom=customs[index])
-            dps = score()
-            if dps > best_dps:
-                best_name, best_dps, best_rank, best_stacks = candidate, dps, max_rank, max_stacks
-        place(index, prev[0], policy=SLOT_POLICY_DISCARD, rank=prev[1], stacks=prev[2], fields=prev[3], roll=prev[4], custom=prev[5])
-        if best_dps > baseline:
-            place(index, best_name, policy=SLOT_POLICY_DISCARD, rank=best_rank, stacks=best_stacks, fields={})
-            baseline = best_dps
-        report(f"Greedy fill ({fill_i + 1}/{len(open_slots)})", 0.15 + 0.50 * (fill_i + 1) / n_open, baseline)
+    def hill_climb(*, label: str, swap_limit: int, progress_start: float, progress_span: float) -> None:
+        nonlocal baseline
+        swaps, improved, last_report_swaps = 0, True, -20
+        while improved and swaps < swap_limit:
+            improved = False
+            for index in open_slots:
+                if swaps >= swap_limit:
+                    break
+                current = names[index]
+                for candidate in pool_for(index):
+                    if swaps >= swap_limit:
+                        break
+                    if candidate == current or not legal(candidate, index):
+                        continue
+                    prev = names[index], ranks[index], stacks_list[index]
+                    max_rank, max_stacks = max_runtime(candidate, slots[index].kind)
+                    place(index, candidate, policy=SLOT_POLICY_DISCARD, rank=max_rank, stacks=max_stacks)
+                    dps = score()
+                    swaps += 1
+                    if dps > baseline:
+                        baseline, improved = dps, True
+                        report(label, progress_start + progress_span * swaps / max(swap_limit, 1), baseline)
+                        last_report_swaps = swaps
+                        break
+                    if swaps - last_report_swaps >= 20:
+                        report(label, progress_start + progress_span * swaps / max(swap_limit, 1), baseline)
+                        last_report_swaps = swaps
+                    place(index, prev[0], policy=SLOT_POLICY_DISCARD, rank=prev[1], stacks=prev[2])
+                if improved:
+                    break
 
-    # 4) Local 1-swap hill climb.
-    swaps, improved, last_report_swaps = 0, True, -20
-    while improved and swaps < HILL_CLIMB_SWAP_LIMIT:
-        improved = False
-        for index in open_slots:
-            if swaps >= HILL_CLIMB_SWAP_LIMIT:
-                break
-            current = names[index]
+    def greedy_fill(*, label: str, progress_start: float, progress_span: float) -> None:
+        nonlocal baseline
+        n_open = max(len(open_slots), 1)
+        for fill_i, index in enumerate(open_slots):
+            best_name, best_dps, best_rank, best_stacks = names[index], baseline, ranks[index], stacks_list[index]
+            prev = names[index], ranks[index], stacks_list[index], dict(riven_fields[index]), rolls[index], customs[index]
             for candidate in pool_for(index):
-                if swaps >= HILL_CLIMB_SWAP_LIMIT:
-                    break
-                if candidate == current or not legal(candidate, index):
+                if not legal(candidate, index):
                     continue
-                prev = names[index], ranks[index], stacks_list[index]
                 max_rank, max_stacks = max_runtime(candidate, slots[index].kind)
-                place(index, candidate, policy=SLOT_POLICY_DISCARD, rank=max_rank, stacks=max_stacks)
-                dps = score()
-                swaps += 1
-                if dps > baseline:
-                    baseline, improved = dps, True
-                    report("Hill climb…", 0.65 + 0.15 * swaps / HILL_CLIMB_SWAP_LIMIT, baseline)
-                    last_report_swaps = swaps
-                    break
-                if swaps - last_report_swaps >= 20:
-                    report("Hill climb…", 0.65 + 0.15 * swaps / HILL_CLIMB_SWAP_LIMIT, baseline)
-                    last_report_swaps = swaps
-                place(index, prev[0], policy=SLOT_POLICY_DISCARD, rank=prev[1], stacks=prev[2])
-            if improved:
-                break
-
-    riven_note = ""
-    if request.find_optimal_riven:
-        targets = [i for i in open_slots if slots[i].kind == "mod" and not slots[i].exilus and not slots[i].stance]
-        preferred = [i for i in targets if names[i] == RIVEN] or [i for i in targets if names[i] == NONE] or targets
-        if not preferred:
-            riven_note = " No open mod slot for Riven search."
-        elif not request.riven_base_stats:
-            riven_note = " Missing Riven base stats."
-        else:
-            target = preferred[0]
-            for i in open_slots:
-                if i != target and names[i] == RIVEN:
-                    place(i, NONE, policy=SLOT_POLICY_DISCARD, fields={})
-            best_dps, best_roll, best_fields = baseline, rolls[target], {}
-            saved = names[target], ranks[target], stacks_list[target], dict(riven_fields[target]), rolls[target]
-            n_rolls = max(len(RIVEN_ROLL_OPTIONS), 1)
-            for roll_i, roll_name in enumerate(RIVEN_ROLL_OPTIONS):
-                report(f"Riven search ({roll_i + 1}/{n_rolls})", 0.80 + 0.10 * (roll_i + 1) / n_rolls, best_dps)
-                pos_count, neg_count, _b, _m = RIVEN_ROLL_CONFIGS[roll_name]
-                chosen: list[tuple[str, float]] = []
-                used: set[str] = set()
-                for _ in range(pos_count):
-                    pick, pick_dps = None, -1.0
-                    for stat in request.riven_base_stats:
-                        if stat in used or stat in request.excluded_riven_stats:
-                            continue
-                        limits = riven_field_limits(request.riven_base_stats, request.riven_disposition, roll_name, stat, False, request.riven_non_negative)
-                        if limits is None:
-                            continue
-                        for value in (limits[1], limits[0]):
-                            trial = {**dict(chosen), stat: value}
-                            place(target, RIVEN, policy=SLOT_POLICY_DISCARD, roll=roll_name, fields=trial)
-                            dps = score()
-                            if dps > pick_dps:
-                                pick, pick_dps = (stat, value), dps
-                    if pick is None:
-                        break
-                    chosen.append(pick)
-                    used.add(pick[0])
-                for _ in range(neg_count):
-                    pick, pick_dps = None, -1.0
-                    for stat in request.riven_base_stats:
-                        if stat in used or stat in request.riven_non_negative or stat in request.excluded_riven_stats:
-                            continue
-                        limits = riven_field_limits(request.riven_base_stats, request.riven_disposition, roll_name, stat, True, request.riven_non_negative)
-                        if limits is None:
-                            continue
-                        for value in (limits[0], limits[1]):
-                            trial = {**dict(chosen), stat: value}
-                            place(target, RIVEN, policy=SLOT_POLICY_DISCARD, roll=roll_name, fields=trial)
-                            dps = score()
-                            if dps > pick_dps:
-                                pick, pick_dps = (stat, value), dps
-                    if pick is None:
-                        break
-                    chosen.append(pick)
-                    used.add(pick[0])
-                fields = dict(chosen)
-                place(target, RIVEN, policy=SLOT_POLICY_DISCARD, roll=roll_name, fields=fields)
+                place(index, candidate, policy=SLOT_POLICY_DISCARD, rank=max_rank, stacks=max_stacks, fields={}, custom=customs[index])
                 dps = score()
                 if dps > best_dps:
-                    best_dps, best_roll, best_fields = dps, roll_name, fields
-            if best_fields:
-                place(target, RIVEN, policy=SLOT_POLICY_DISCARD, roll=best_roll, fields=best_fields)
+                    best_name, best_dps, best_rank, best_stacks = candidate, dps, max_rank, max_stacks
+            place(index, prev[0], policy=SLOT_POLICY_DISCARD, rank=prev[1], stacks=prev[2], fields=prev[3], roll=prev[4], custom=prev[5])
+            if best_dps > baseline:
+                place(index, best_name, policy=SLOT_POLICY_DISCARD, rank=best_rank, stacks=best_stacks, fields={})
                 baseline = best_dps
-                riven_note = f" Optimal Riven on slot {target + 1} ({best_roll})."
-            else:
-                place(target, saved[0], policy=SLOT_POLICY_DISCARD, rank=saved[1], stacks=saved[2], fields=saved[3], roll=saved[4])
-                riven_note = " Riven search found no improvement."
+            report(f"{label} ({fill_i + 1}/{len(open_slots)})", progress_start + progress_span * (fill_i + 1) / n_open, baseline)
 
-    evolution_note = ""
-    evolutions_optimized = False
+    evolution_choices: dict[int, tuple[int, ...]] = {}
     if request.find_optimal_evolutions:
         custom_metadata = None
         if request.custom_weapon:
@@ -527,30 +458,169 @@ def optimize_build(request: OptimizeRequest, progress: ProgressCallback | None =
                 custom_metadata = parse_database_entry(request.custom_weapon_entry, default_name="Custom Weapon", default_type=request.weapon_type.casefold())
             except ValueError:
                 custom_metadata = None
-        choices = weapon_evolution_perk_choices(None if request.custom_weapon else request.weapon_name, custom_metadata=custom_metadata)
-        if not choices:
+        evolution_choices = weapon_evolution_perk_choices(None if request.custom_weapon else request.weapon_name, custom_metadata=custom_metadata)
+
+    def search_evolutions(*, label: str, progress_start: float, progress_span: float) -> bool:
+        """Exhaustive perk search for the current build. Returns True if selection changed."""
+        nonlocal baseline, current_evolutions
+        if not evolution_choices:
+            return False
+        tiers = sorted(evolution_choices)
+        perk_lists = [evolution_choices[tier] for tier in tiers]
+        previous = dict(current_evolutions)
+        best_evolutions: dict[int, int] = {}
+        best_dps = -1.0
+        total = 1
+        for options in perk_lists:
+            total *= max(len(options), 1)
+        for combo_i, combo in enumerate(itertools.product(*perk_lists), start=1):
+            trial = {tier: perk for tier, perk in zip(tiers, combo)}
+            current_evolutions = trial
+            dps = score()
+            if dps > best_dps:
+                best_dps, best_evolutions = dps, dict(trial)
+            if combo_i == 1 or combo_i == total or combo_i % 8 == 0:
+                report(f"{label} ({combo_i}/{total})", progress_start + progress_span * combo_i / max(total, 1), best_dps)
+        current_evolutions = best_evolutions
+        baseline = best_dps
+        return best_evolutions != previous
+
+    # Seed Incarnon perks before greedy fill when requested, so mod choices see the right attack profile.
+    if request.find_optimal_evolutions and evolution_choices:
+        search_evolutions(label="Incarnon seed", progress_start=0.12, progress_span=0.06)
+
+    # 3) Greedy fill open slots by best ΔDPS.
+    greedy_fill(label="Greedy fill", progress_start=0.18, progress_span=0.40)
+    # 4) Local 1-swap hill climb.
+    hill_climb(label="Hill climb…", swap_limit=HILL_CLIMB_SWAP_LIMIT, progress_start=0.58, progress_span=0.10)
+
+    # 5) Alternate Incarnon perks <-> mods — they depend on each other.
+    evolution_note = ""
+    evolutions_optimized = False
+    if request.find_optimal_evolutions:
+        if not evolution_choices:
             evolution_note = " No Incarnon evolutions available."
         else:
-            tiers = sorted(choices)
-            perk_lists = [choices[tier] for tier in tiers]
-            best_evolutions: dict[int, int] = {}
-            best_dps = -1.0
-            total = 1
-            for options in perk_lists:
-                total *= max(len(options), 1)
-            for combo_i, combo in enumerate(itertools.product(*perk_lists), start=1):
-                trial = {tier: perk for tier, perk in zip(tiers, combo)}
-                current_evolutions = trial
-                dps = score()
-                if dps > best_dps:
-                    best_dps, best_evolutions = dps, dict(trial)
-                if combo_i == 1 or combo_i == total or combo_i % 8 == 0:
-                    report(f"Incarnon search ({combo_i}/{total})", 0.90 + 0.08 * combo_i / max(total, 1), best_dps)
-            current_evolutions = best_evolutions
-            baseline = best_dps
+            search_evolutions(label="Incarnon search", progress_start=0.68, progress_span=0.05)
+            hill_climb(label="Refine mods…", swap_limit=EVOLUTION_REFINE_HILL_LIMIT, progress_start=0.73, progress_span=0.04)
+            changed = search_evolutions(label="Incarnon refine", progress_start=0.77, progress_span=0.03)
+            if changed:
+                hill_climb(label="Refine mods…", swap_limit=EVOLUTION_REFINE_HILL_LIMIT, progress_start=0.80, progress_span=0.03)
             evolutions_optimized = True
-            picks = ", ".join(f"E{tier}:P{perk}" for tier, perk in sorted(best_evolutions.items()))
+            picks = ", ".join(f"E{tier}:P{perk}" for tier, perk in sorted(current_evolutions.items()))
             evolution_note = f" Optimal Incarnon ({picks})."
+
+    riven_note = ""
+    if request.find_optimal_riven:
+        targets = [i for i in open_slots if slots[i].kind == "mod" and not slots[i].exilus and not slots[i].stance]
+        ordered_targets = []
+        for group in (
+            [i for i in targets if names[i] == RIVEN],
+            [i for i in targets if names[i] == NONE],
+            [i for i in targets if names[i] not in {RIVEN, NONE}],
+        ):
+            for index in group:
+                if index not in ordered_targets:
+                    ordered_targets.append(index)
+        if not ordered_targets:
+            riven_note = " No open mod slot for Riven search."
+        elif not request.riven_base_stats:
+            riven_note = " Missing Riven base stats."
+        else:
+            for i in open_slots:
+                if names[i] == RIVEN:
+                    place(i, NONE, policy=SLOT_POLICY_DISCARD, fields={})
+            baseline = score()
+            saved_slots = {i: (names[i], ranks[i], stacks_list[i], dict(riven_fields[i]), rolls[i]) for i in ordered_targets}
+
+            def restore_targets() -> None:
+                for index, saved in saved_slots.items():
+                    place(index, saved[0], policy=SLOT_POLICY_DISCARD, rank=saved[1], stacks=saved[2], fields=saved[3], roll=saved[4])
+
+            # Discover Riven rolls once on the cheapest seat (empty/existing Riven, else weakest mod).
+            seat_candidates = [i for i in ordered_targets if saved_slots[i][0] in {NONE, RIVEN}]
+            if seat_candidates:
+                seat = seat_candidates[0]
+            else:
+                # Weakest mod = removing it hurts least = highest score with that slot cleared.
+                weakest, best_cleared = ordered_targets[0], -1.0
+                for index in ordered_targets:
+                    saved = saved_slots[index]
+                    place(index, NONE, policy=SLOT_POLICY_DISCARD, fields={})
+                    cleared = score()
+                    place(index, saved[0], policy=SLOT_POLICY_DISCARD, rank=saved[1], stacks=saved[2], fields=saved[3], roll=saved[4])
+                    if cleared > best_cleared:
+                        weakest, best_cleared = index, cleared
+                seat = weakest
+
+            def greedy_riven(roll_name: str) -> dict[str, float]:
+                pos_count, neg_count, _b, _m = RIVEN_ROLL_CONFIGS[roll_name]
+                chosen: list[tuple[str, float]] = []
+                used: set[str] = set()
+                for negative in (False, True):
+                    need = neg_count if negative else pos_count
+                    for _ in range(need):
+                        pick, pick_dps = None, -1.0
+                        for stat in request.riven_base_stats:
+                            if stat in used or stat in request.excluded_riven_stats:
+                                continue
+                            if negative and stat in request.riven_non_negative:
+                                continue
+                            limits = riven_field_limits(request.riven_base_stats, request.riven_disposition, roll_name, stat, negative, request.riven_non_negative)
+                            if limits is None:
+                                continue
+                            # Positives: max roll. Negatives: least harmful roll only.
+                            value = limits[1]
+                            trial = {**dict(chosen), stat: value}
+                            place(seat, RIVEN, policy=SLOT_POLICY_DISCARD, roll=roll_name, fields=trial)
+                            dps = score()
+                            if dps > pick_dps:
+                                pick, pick_dps = (stat, value), dps
+                        if pick is None:
+                            break
+                        chosen.append(pick)
+                        used.add(pick[0])
+                return dict(chosen)
+
+            restore_targets()
+            place(seat, NONE, policy=SLOT_POLICY_DISCARD, fields={})
+            roll_rivens: list[tuple[str, dict[str, float]]] = []
+            n_rolls = max(len(RIVEN_ROLL_OPTIONS), 1)
+            for roll_i, roll_name in enumerate(RIVEN_ROLL_OPTIONS):
+                report(f"Riven search ({roll_i + 1}/{n_rolls})", 0.83 + 0.05 * (roll_i + 1) / n_rolls, baseline)
+                fields = greedy_riven(roll_name)
+                if fields:
+                    roll_rivens.append((roll_name, fields))
+            restore_targets()
+
+            # Test each discovered Riven in every open mod slot (cheap: one score each).
+            best_dps, best_target, best_roll, best_fields = baseline, None, "", {}
+            checks = max(len(roll_rivens) * len(ordered_targets), 1)
+            check_i = 0
+            for roll_name, fields in roll_rivens:
+                for target in ordered_targets:
+                    check_i += 1
+                    restore_targets()
+                    place(target, RIVEN, policy=SLOT_POLICY_DISCARD, roll=roll_name, fields=fields)
+                    dps = score()
+                    if check_i == 1 or check_i == checks or check_i % 4 == 0:
+                        report(f"Riven slot check ({check_i}/{checks})", 0.88 + 0.04 * check_i / checks, best_dps)
+                    if dps > best_dps:
+                        best_dps, best_target, best_roll, best_fields = dps, target, roll_name, fields
+            restore_targets()
+            if best_target is not None and best_fields:
+                place(best_target, RIVEN, policy=SLOT_POLICY_DISCARD, roll=best_roll, fields=best_fields)
+                baseline = best_dps
+                riven_note = f" Optimal Riven on slot {best_target + 1} ({best_roll})."
+            else:
+                riven_note = " Riven search found no improvement over the mods it would replace."
+            # Riven can change which Incarnon perks are best.
+            if request.find_optimal_evolutions and evolution_choices:
+                if search_evolutions(label="Incarnon after Riven", progress_start=0.92, progress_span=0.04):
+                    hill_climb(label="Refine mods…", swap_limit=EVOLUTION_REFINE_HILL_LIMIT, progress_start=0.96, progress_span=0.02)
+                    picks = ", ".join(f"E{tier}:P{perk}" for tier, perk in sorted(current_evolutions.items()))
+                    evolution_note = f" Optimal Incarnon ({picks})."
+                    evolutions_optimized = True
 
     final_dps = score()
     report("Finishing…", 0.99, final_dps)
