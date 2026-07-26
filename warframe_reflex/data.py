@@ -231,7 +231,11 @@ def weapon_evolution_runtime_controls(weapon_name: str | None, selected_evolutio
                     label = name.replace("_", " ").strip().title()
                     if label.casefold().startswith("on "):
                         label = label[3:]
-                    stacks[name] = {"name": name, "label": f"{label} Stacks", "maximum": maximum}
+                    existing = stacks.get(name)
+                    if existing is not None:
+                        existing["maximum"] = max(int(existing["maximum"]), maximum)
+                    else:
+                        stacks[name] = {"name": name, "label": f"{label} Stacks", "maximum": maximum}
                     toggles.pop(name, None)
                     continue
                 condition = effect.get("when")

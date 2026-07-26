@@ -24,8 +24,8 @@ class RuntimeToggleField:
 class RuntimeStackField:
     name: str
     label: str
-    value: int
-    max_value: int
+    value: str
+    options: list[str]
 
 
 @dataclass

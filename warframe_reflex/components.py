@@ -487,7 +487,7 @@ def incarnon_toggle_control(field: rx.Var[RuntimeToggleField]) -> rx.Component:
 
 
 def incarnon_stack_control(field: rx.Var[RuntimeStackField]) -> rx.Component:
-    return number_control(field.label, field.value, lambda value: CalculatorState.set_evolution_stacks(field.name, value), minimum=0, maximum=field.max_value, step="1")
+    return select_control(field.label, field.options, field.value, lambda value: CalculatorState.set_evolution_stacks(field.name, value))
 
 
 def incarnon_runtime_controls() -> rx.Component:

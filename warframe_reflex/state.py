@@ -602,7 +602,7 @@ class CalculatorState(rx.State):
     def _evolution_runtime_context(self) -> dict[str, bool | int]:
         return {
             **{field.name: bool(field.value) for field in self.evolution_condition_toggles},
-            **{field.name: int(field.value) for field in self.evolution_stack_fields},
+            **{field.name: parse_int(field.value) for field in self.evolution_stack_fields},
         }
 
     def _combo_runtime_value(self) -> int | str:
@@ -825,8 +825,8 @@ class CalculatorState(rx.State):
     def set_evolution_stacks(self, name: str, value: str):
         fields = copy.deepcopy(self.evolution_stack_fields)
         for field in fields:
-            if field.name == name:
-                field.value = max(0, min(parse_int(value, field.value), field.max_value))
+            if field.name == name and value in field.options:
+                field.value = value
                 self.evolution_stack_fields = fields
                 self._invalidate_optimizer_result()
                 self._recalculate()
@@ -1538,9 +1538,15 @@ class CalculatorState(rx.State):
         custom_metadata = self._custom_weapon_metadata() if self.custom_weapon else None
         toggle_specs, stack_specs = weapon_evolution_runtime_controls(None if self.custom_weapon else self.selected_weapon, self._selected_evolutions(), custom_metadata=custom_metadata)
         current_toggles = {field.name: field.value for field in self.evolution_condition_toggles}
-        current_stacks = {field.name: field.value for field in self.evolution_stack_fields}
+        current_stacks = {field.name: str(field.value) for field in self.evolution_stack_fields}
         self.evolution_condition_toggles = [RuntimeToggleField(spec["name"], spec["label"], current_toggles.get(spec["name"], True)) for spec in toggle_specs]
-        self.evolution_stack_fields = [RuntimeStackField(spec["name"], spec["label"], max(0, min(int(current_stacks.get(spec["name"], spec["maximum"])), spec["maximum"])), spec["maximum"]) for spec in stack_specs]
+        stack_fields: list[RuntimeStackField] = []
+        for spec in stack_specs:
+            options = [str(value) for value in range(int(spec["maximum"]) + 1)]
+            default = str(spec["maximum"])
+            selected = current_stacks.get(spec["name"], default)
+            stack_fields.append(RuntimeStackField(spec["name"], spec["label"], selected if selected in options else default, options))
+        self.evolution_stack_fields = stack_fields
 
     def _refresh_weapon_features(self):
         if self.selected_weapon == NONE:
