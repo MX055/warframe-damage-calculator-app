@@ -353,8 +353,10 @@ class CalculatorState(rx.State):
     selected_weapon: str = NONE
 
     weapon_options: list[str] = rx.field(default_factory=lambda: [NONE])
+    weapon_select_open: bool = False
     selected_enemy: str = NONE
     enemy_options: list[str] = rx.field(default_factory=lambda: [NONE, CUSTOM])
+    enemy_select_open: bool = False
     custom_enemy_entry: str = ""
     custom_enemy_placeholder: str = rx.field(default_factory=_custom_enemy_template)
     enemy_level: int = 100
@@ -716,7 +718,16 @@ class CalculatorState(rx.State):
         self._recalculate()
 
     @rx.event
+    def set_weapon_select_open(self, value: bool):
+        self.weapon_select_open = bool(value)
+
+    @rx.event
+    def set_enemy_select_open(self, value: bool):
+        self.enemy_select_open = bool(value)
+
+    @rx.event
     def set_weapon(self, value: str):
+        self.weapon_select_open = False
         selected_weapon = value if value in self.weapon_options else NONE
         if selected_weapon == self.selected_weapon:
             return
@@ -1258,15 +1269,19 @@ class CalculatorState(rx.State):
                         self._apply_optimize_result(result)
                         self.optimize_status = result.message
                         self.optimize_best_dps = f"{result.total_dps:,.2f}"
-                        self.optimize_phase = "Done"
+                        self.optimize_phase = "Applying build…"
                         self.optimize_progress = 100.0
                         self.optimize_progress_width = "100%"
                         self.optimize_evaluations = result.evaluations
+                await asyncio.sleep(0)
+                async with self:
+                    if self.optimize_revision == revision:
                         self._refresh_upgrade_options()
                         self._refresh_all_riven_field_limits()
                         self._refresh_slot_field_options()
                         self._recalculate()
-                        self.optimize_running = False
+                        self.optimize_phase = "Done"
+                    self.optimize_running = False
                 await fut
                 return
             if terminal[0] == "error":
@@ -2302,7 +2317,7 @@ class CalculatorState(rx.State):
         return rows
 
     def _pad_slot_preview_rows(self, rows: list[DisplayRow], *, minimum: int = 4) -> list[DisplayRow]:
-        padded = list(rows) if rows else [DisplayRow("No stats.", "")]
+        padded = list(rows[:minimum]) if rows else [DisplayRow("No stats.", "")]
         while len(padded) < minimum:
             padded.append(DisplayRow("\u00a0", "\u00a0"))
         return padded

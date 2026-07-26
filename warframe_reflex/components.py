@@ -61,7 +61,7 @@ def select_input(
     *,
     disabled=False,
 ) -> rx.Component:
-    """Radix select — matches app chrome; use native_select_input for huge lists."""
+    """Radix select — matches app chrome."""
     return rx.select.root(
         rx.select.trigger(
             width="100%",
@@ -85,21 +85,42 @@ def select_input(
     )
 
 
-def native_select_input(
+def lazy_select_input(
     options,
     value,
     on_change,
     *,
+    open_var,
+    set_open,
     disabled=False,
 ) -> rx.Component:
-    """Native select for very large option lists (enemies/weapons) — much faster to sync."""
-    return rx.el.select(
-        rx.foreach(options, lambda option: rx.el.option(option, value=option)),
+    """Radix select that only mounts options while open — keeps large lists fast without native styling."""
+    return rx.select.root(
+        rx.select.trigger(
+            rx.text(value),
+            width="100%",
+            min_width="0",
+            max_width="100%",
+            height="32px",
+            min_height="32px",
+            class_name="full-width-select-trigger",
+            custom_attrs={"data-full-width-select": "true"},
+        ),
+        rx.cond(
+            open_var,
+            rx.select.content(
+                rx.select.group(
+                    rx.foreach(options, lambda option: rx.select.item(option, value=option)),
+                ),
+                position="popper",
+            ),
+        ),
         value=value,
+        open=open_var,
+        on_open_change=set_open,
         on_change=on_change,
         disabled=disabled,
-        class_name="native-select full-width-select-trigger",
-        custom_attrs={"data-full-width-select": "true"},
+        width="100%",
     )
 
 
@@ -116,6 +137,40 @@ def select_control(
     return labeled_control(
         label,
         control(options, value, on_change, disabled=disabled),
+    )
+
+
+def native_select_input(
+    options,
+    value,
+    on_change,
+    *,
+    disabled=False,
+) -> rx.Component:
+    """Native select for very large lists (enemies) — browsers handle thousands of options cheaply."""
+    return rx.el.select(
+        rx.foreach(options, lambda option: rx.el.option(option, value=option)),
+        value=value,
+        on_change=on_change,
+        disabled=disabled,
+        class_name="native-select full-width-select-trigger",
+        custom_attrs={"data-full-width-select": "true"},
+    )
+
+
+def lazy_select_control(
+    label: str,
+    options,
+    value,
+    on_change,
+    *,
+    open_var,
+    set_open,
+    disabled=False,
+) -> rx.Component:
+    return labeled_control(
+        label,
+        lazy_select_input(options, value, on_change, open_var=open_var, set_open=set_open, disabled=disabled),
     )
 
 
@@ -513,6 +568,7 @@ def incarnon_runtime_controls() -> rx.Component:
                 columns=rx.breakpoints(initial="1", md="2"),
                 gap="4",
                 width="100%",
+                class_name="form-grid form-grid-2 incarnon-conditions-grid",
             ),
             width="100%",
             gap="3",
@@ -533,12 +589,13 @@ def weapon_section() -> rx.Component:
                         CalculatorState.selected_weapon_category,
                         CalculatorState.set_weapon_type,
                     ),
-                    select_control(
+                    lazy_select_control(
                         "Weapon",
                         CalculatorState.weapon_options,
                         CalculatorState.selected_weapon,
                         CalculatorState.set_weapon,
-                        native=True,
+                        open_var=CalculatorState.weapon_select_open,
+                        set_open=CalculatorState.set_weapon_select_open,
                     ),
                     columns=rx.breakpoints(initial="1", md="2"),
                     gap="4",
@@ -622,7 +679,13 @@ def enemy_section() -> rx.Component:
         section_title("Enemy", "Choose a database target or define a custom enemy."),
         panel(
             rx.vstack(
-                select_control("Enemy", CalculatorState.enemy_options, CalculatorState.selected_enemy, CalculatorState.set_enemy, native=True),
+                select_control(
+                    "Enemy",
+                    CalculatorState.enemy_options,
+                    CalculatorState.selected_enemy,
+                    CalculatorState.set_enemy,
+                    native=True,
+                ),
                 rx.cond(
                     CalculatorState.custom_enemy,
                     database_entry_input(

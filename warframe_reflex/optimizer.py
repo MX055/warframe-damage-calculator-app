@@ -47,13 +47,15 @@ DAMAGE_RELATED_STATS = {
     "corpus_damage", "grineer_damage", "infested_damage", "orokin_damage", "murmur_damage",
     "sentient_damage", "secondary_enervate", "secondary_encumber", "melee_duplicate", "melee_doughty",
 }
-CANDIDATE_SOFT_CAP = 150
+CANDIDATE_SOFT_CAP = 72
 CANDIDATE_SHORTLIST_LIMIT = 24
 CANDIDATE_SHORTLIST_HARD_CAP = 36
 CANDIDATE_PER_STAT_LIMIT = 2
 CANDIDATE_RAW_STAT_LIMIT = 2
-HILL_CLIMB_SWAP_LIMIT = 60
-EVOLUTION_REFINE_HILL_LIMIT = 40
+HILL_CLIMB_SWAP_LIMIT = 40
+EVOLUTION_REFINE_HILL_LIMIT = 20
+EVOLUTION_EXHAUSTIVE_LIMIT = 36
+EVOLUTION_DESCENT_PASSES = 2
 
 ProgressCallback = Callable[[str, float, int, float | None], None]  # phase, fraction 0-1, evaluations, best_score
 MAXIMIZE_TARGET_ATTRS = frozenset(OPTIMIZE_MAXIMIZE_TARGETS.values())
@@ -419,7 +421,7 @@ def optimize_build(request: OptimizeRequest, progress: ProgressCallback | None =
 
     def hill_climb(*, label: str, swap_limit: int, progress_start: float, progress_span: float) -> None:
         nonlocal baseline
-        swaps, improved, last_report_swaps = 0, True, -20
+        swaps, improved, last_report_swaps = 0, True, -8
         while improved and swaps < swap_limit:
             improved = False
             for index in open_slots:
@@ -441,12 +443,13 @@ def optimize_build(request: OptimizeRequest, progress: ProgressCallback | None =
                         report(label, progress_start + progress_span * swaps / max(swap_limit, 1), baseline)
                         last_report_swaps = swaps
                         break
-                    if swaps - last_report_swaps >= 20:
+                    if swaps - last_report_swaps >= 8:
                         report(label, progress_start + progress_span * swaps / max(swap_limit, 1), baseline)
                         last_report_swaps = swaps
                     place(index, prev[0], policy=SLOT_POLICY_DISCARD, rank=prev[1], stacks=prev[2])
                 if improved:
                     break
+        report(label, progress_start + progress_span, baseline)
 
     def greedy_fill(*, label: str, progress_start: float, progress_span: float) -> None:
         nonlocal baseline
@@ -484,51 +487,82 @@ def optimize_build(request: OptimizeRequest, progress: ProgressCallback | None =
         evolution_choices = weapon_evolution_perk_choices(None if request.custom_weapon else request.weapon_name, custom_metadata=custom_metadata)
 
     def search_evolutions(*, label: str, progress_start: float, progress_span: float) -> bool:
-        """Exhaustive perk search for the current build. Returns True if selection changed."""
+        """Pick Incarnon perks for the current build. Small spaces are exhaustive; large ones use coordinate descent."""
         nonlocal baseline, current_evolutions
         if not evolution_choices:
             return False
         tiers = sorted(evolution_choices)
         perk_lists = [evolution_choices[tier] for tier in tiers]
         previous = dict(current_evolutions)
-        best_evolutions: dict[int, int] = {}
-        best_dps = -1.0
         total = 1
         for options in perk_lists:
             total *= max(len(options), 1)
-        for combo_i, combo in enumerate(itertools.product(*perk_lists), start=1):
-            trial = {tier: perk for tier, perk in zip(tiers, combo)}
-            current_evolutions = trial
-            dps = score()
-            if dps > best_dps:
-                best_dps, best_evolutions = dps, dict(trial)
-            if combo_i == 1 or combo_i == total or combo_i % 8 == 0:
-                report(f"{label} ({combo_i}/{total})", progress_start + progress_span * combo_i / max(total, 1), best_dps)
-        current_evolutions = best_evolutions
+
+        if total <= EVOLUTION_EXHAUSTIVE_LIMIT:
+            best_evolutions: dict[int, int] = {}
+            best_dps = -1.0
+            for combo_i, combo in enumerate(itertools.product(*perk_lists), start=1):
+                trial = {tier: perk for tier, perk in zip(tiers, combo)}
+                current_evolutions = trial
+                dps = score()
+                if dps > best_dps:
+                    best_dps, best_evolutions = dps, dict(trial)
+                if combo_i == 1 or combo_i == total or combo_i % 8 == 0:
+                    report(f"{label} ({combo_i}/{total})", progress_start + progress_span * combo_i / max(total, 1), best_dps)
+            current_evolutions = best_evolutions
+            baseline = best_dps
+            return best_evolutions != previous
+
+        # Coordinate descent: optimize one tier at a time. O(passes * sum(choices)) instead of O(product).
+        current = {}
+        for tier in tiers:
+            choices = evolution_choices[tier]
+            pick = current_evolutions.get(tier, choices[0])
+            current[tier] = pick if pick in choices else choices[0]
+        current_evolutions = dict(current)
+        best_dps = score()
+        steps = max(sum(len(evolution_choices[tier]) for tier in tiers) * EVOLUTION_DESCENT_PASSES, 1)
+        step_i = 0
+        for pass_i in range(EVOLUTION_DESCENT_PASSES):
+            improved = False
+            for tier in tiers:
+                best_perk = current[tier]
+                for perk in evolution_choices[tier]:
+                    step_i += 1
+                    current_evolutions = {**current, tier: perk}
+                    dps = score()
+                    if dps > best_dps:
+                        best_dps, best_perk, improved = dps, perk, True
+                    if step_i == 1 or step_i == steps or step_i % 6 == 0:
+                        report(f"{label} ({step_i}/{steps})", progress_start + progress_span * step_i / steps, best_dps)
+                if best_perk != current[tier]:
+                    current[tier] = best_perk
+                    improved = True
+                current_evolutions = dict(current)
+            if not improved:
+                break
         baseline = best_dps
-        return best_evolutions != previous
+        return current != previous
 
     # Seed Incarnon perks before greedy fill when requested, so mod choices see the right attack profile.
     if request.find_optimal_evolutions and evolution_choices:
-        search_evolutions(label="Incarnon seed", progress_start=0.12, progress_span=0.06)
+        search_evolutions(label="Incarnon seed", progress_start=0.12, progress_span=0.05)
 
     # 3) Greedy fill open slots by best ΔDPS.
-    greedy_fill(label="Greedy fill", progress_start=0.18, progress_span=0.40)
+    greedy_fill(label="Greedy fill", progress_start=0.17, progress_span=0.38)
     # 4) Local 1-swap hill climb.
-    hill_climb(label="Hill climb…", swap_limit=HILL_CLIMB_SWAP_LIMIT, progress_start=0.58, progress_span=0.10)
+    hill_climb(label="Hill climb…", swap_limit=HILL_CLIMB_SWAP_LIMIT, progress_start=0.55, progress_span=0.10)
 
-    # 5) Alternate Incarnon perks <-> mods — they depend on each other.
+    # 5) One Incarnon pass after mods settle — avoid stacked refine loops.
     evolution_note = ""
     evolutions_optimized = False
     if request.find_optimal_evolutions:
         if not evolution_choices:
             evolution_note = " No Incarnon evolutions available."
         else:
-            search_evolutions(label="Incarnon search", progress_start=0.68, progress_span=0.05)
-            hill_climb(label="Refine mods…", swap_limit=EVOLUTION_REFINE_HILL_LIMIT, progress_start=0.73, progress_span=0.04)
-            changed = search_evolutions(label="Incarnon refine", progress_start=0.77, progress_span=0.03)
+            changed = search_evolutions(label="Incarnon search", progress_start=0.65, progress_span=0.06)
             if changed:
-                hill_climb(label="Refine mods…", swap_limit=EVOLUTION_REFINE_HILL_LIMIT, progress_start=0.80, progress_span=0.03)
+                hill_climb(label="Refine mods…", swap_limit=EVOLUTION_REFINE_HILL_LIMIT, progress_start=0.71, progress_span=0.05)
             evolutions_optimized = True
             picks = ", ".join(f"E{tier}:P{perk}" for tier, perk in sorted(current_evolutions.items()))
             evolution_note = f" Optimal Incarnon ({picks})."
@@ -576,16 +610,19 @@ def optimize_build(request: OptimizeRequest, progress: ProgressCallback | None =
                         weakest, best_cleared = index, cleared
                 seat = weakest
 
-            def greedy_riven(roll_name: str) -> dict[str, float]:
+            def greedy_riven(roll_name: str, *, progress_start: float, progress_span: float) -> dict[str, float]:
                 pos_count, neg_count, _b, _m = RIVEN_ROLL_CONFIGS[roll_name]
                 chosen: list[tuple[str, float]] = []
                 used: set[str] = set()
+                stats = [stat for stat in request.riven_base_stats if stat not in request.excluded_riven_stats]
+                total_picks = max(pos_count + neg_count, 1)
+                pick_i = 0
                 for negative in (False, True):
                     need = neg_count if negative else pos_count
                     for _ in range(need):
                         pick, pick_dps = None, -1.0
-                        for stat in request.riven_base_stats:
-                            if stat in used or stat in request.excluded_riven_stats:
+                        for stat in stats:
+                            if stat in used:
                                 continue
                             if negative and stat in request.riven_non_negative:
                                 continue
@@ -599,6 +636,8 @@ def optimize_build(request: OptimizeRequest, progress: ProgressCallback | None =
                             dps = score()
                             if dps > pick_dps:
                                 pick, pick_dps = (stat, value), dps
+                        pick_i += 1
+                        report(f"Riven search ({roll_name})", progress_start + progress_span * pick_i / total_picks, pick_dps if pick is not None else baseline)
                         if pick is None:
                             break
                         chosen.append(pick)
@@ -610,8 +649,9 @@ def optimize_build(request: OptimizeRequest, progress: ProgressCallback | None =
             roll_rivens: list[tuple[str, dict[str, float]]] = []
             n_rolls = max(len(RIVEN_ROLL_OPTIONS), 1)
             for roll_i, roll_name in enumerate(RIVEN_ROLL_OPTIONS):
-                report(f"Riven search ({roll_i + 1}/{n_rolls})", 0.83 + 0.05 * (roll_i + 1) / n_rolls, baseline)
-                fields = greedy_riven(roll_name)
+                roll_start = 0.76 + 0.10 * roll_i / n_rolls
+                roll_span = 0.10 / n_rolls
+                fields = greedy_riven(roll_name, progress_start=roll_start, progress_span=roll_span)
                 if fields:
                     roll_rivens.append((roll_name, fields))
             restore_targets()
@@ -626,21 +666,20 @@ def optimize_build(request: OptimizeRequest, progress: ProgressCallback | None =
                     restore_targets()
                     place(target, RIVEN, policy=SLOT_POLICY_DISCARD, roll=roll_name, fields=fields)
                     dps = score()
-                    if check_i == 1 or check_i == checks or check_i % 4 == 0:
-                        report(f"Riven slot check ({check_i}/{checks})", 0.88 + 0.04 * check_i / checks, best_dps)
+                    if check_i == 1 or check_i == checks or check_i % 3 == 0:
+                        report(f"Riven slot check ({check_i}/{checks})", 0.86 + 0.08 * check_i / checks, best_dps)
                     if dps > best_dps:
                         best_dps, best_target, best_roll, best_fields = dps, target, roll_name, fields
             restore_targets()
             if best_target is not None and best_fields:
                 place(best_target, RIVEN, policy=SLOT_POLICY_DISCARD, roll=best_roll, fields=best_fields)
                 baseline = best_dps
-                riven_note = f" Optimal Riven on slot {best_target + 1} ({best_roll})."
+                riven_note = f" Optimal Riven on {SLOT_CONFIGS[best_target]['label']} ({best_roll})."
             else:
                 riven_note = " Riven search found no improvement over the mods it would replace."
-            # Riven can change which Incarnon perks are best.
+            # Riven can change which Incarnon perks are best — one quick pass, no extra hill climb.
             if request.find_optimal_evolutions and evolution_choices:
-                if search_evolutions(label="Incarnon after Riven", progress_start=0.92, progress_span=0.04):
-                    hill_climb(label="Refine mods…", swap_limit=EVOLUTION_REFINE_HILL_LIMIT, progress_start=0.96, progress_span=0.02)
+                if search_evolutions(label="Incarnon after Riven", progress_start=0.94, progress_span=0.04):
                     picks = ", ".join(f"E{tier}:P{perk}" for tier, perk in sorted(current_evolutions.items()))
                     evolution_note = f" Optimal Incarnon ({picks})."
                     evolutions_optimized = True
