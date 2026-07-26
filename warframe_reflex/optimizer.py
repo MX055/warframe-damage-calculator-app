@@ -30,7 +30,7 @@ from .data import (
     upgrade_names_for_ui,
     weapon_evolution_perk_choices,
 )
-from .engine import build_upgrade, configured_weapon, custom_upgrade_from_entry, is_non_empty_upgrade, parse_database_entry, progenitor_upgrade
+from .engine import build_upgrade, configured_enemy, configured_weapon, custom_upgrade_from_entry, is_non_empty_upgrade, parse_database_entry, progenitor_upgrade
 
 NONE = "None"
 CUSTOM = "Custom"
@@ -98,6 +98,11 @@ class OptimizeRequest:
     external_fields: dict[str, float]
     slots: list[SlotSpec]
     find_optimal_riven: bool
+    enemy_name: str = NONE
+    custom_enemy_entry: str = ""
+    enemy_level: int = 1
+    enemy_steel_path: bool = False
+    enemy_empowered: bool = False
     find_optimal_evolutions: bool = False
     maximize_target: str = OPTIMIZE_MAXIMIZE_TARGETS[DEFAULT_OPTIMIZE_MAXIMIZE]
     stance_combo: str = "neutral"
@@ -140,7 +145,7 @@ def riven_field_limits(base_stats: dict[str, float], disposition: float, roll_na
 
 
 def _empty_upgrade(kind: str) -> Upgrade:
-    return Upgrade({"name": NONE, "type": kind, "stats": {}})
+    return Upgrade({"name": NONE, "type": kind, "stats": {}, "runtime": {"rank": 0}})
 
 
 def _has_damage_stats(name: str) -> bool:
@@ -219,12 +224,14 @@ def optimize_build(request: OptimizeRequest, progress: ProgressCallback | None =
 
     progenitor = progenitor_upgrade(request.progenitor_element, request.progenitor_value, NO_EFFECT)
     external = build_upgrade("External Buffs", dict(request.external_fields))
+    target = configured_enemy(request.enemy_name, custom_enemy=request.enemy_name == CUSTOM, custom_entry=request.custom_enemy_entry if request.enemy_name == CUSTOM else None, level=request.enemy_level, steel_path=request.enemy_steel_path, empowered=request.enemy_empowered)
     optimizer_weapon = configured_weapon(
         request.weapon_type, request.weapon_name, custom_weapon=request.custom_weapon, base_stats={}, upgrades=[],
         custom_entry=request.custom_weapon_entry if request.custom_weapon else None,
         selected_mode=request.attack_mode or None, evolutions=request.evolutions or None,
         stance_combo=stance_combo if request.weapon_type == "Melee" else None,
         ability_strength=request.ability_strength,
+        target=target,
     )
     optimizer_build = Build()
     optimizer_weapon.build = optimizer_build

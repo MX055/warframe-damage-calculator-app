@@ -7,7 +7,7 @@ from functools import lru_cache
 from pathlib import Path
 
 import warframe_damage_calculator
-from warframe_damage_calculator import Upgrade, arsenal
+from warframe_damage_calculator import Enemy, Upgrade, arsenal
 from warframe_damage_calculator.utils.constants import HEAVY_ATTACK_CATEGORIES, SLIDE_ATTACK_CATEGORIES
 
 from .constants import WEAPON_CATEGORY_TYPES, WEAPON_COMPATIBILITY_FAMILIES, WEAPON_TYPES
@@ -80,6 +80,10 @@ def raw_upgrades_database() -> dict:
     return raw_database().get("upgrades", {}) or {}
 
 
+def raw_enemies_database() -> dict:
+    return raw_database().get("enemies", {}) or {}
+
+
 def raw_riven_stats_database() -> dict:
     return raw_database().get("riven_stats", {}) or {}
 
@@ -93,6 +97,12 @@ def raw_weapon_metadata(_weapon_type_name: str, weapon_name: str | None) -> dict
 def raw_upgrade_metadata(upgrade_name: str, *, kind: str | None = None) -> dict:
     metadata = raw_upgrades_database().get(upgrade_name, {}) or {}
     return metadata if not kind or metadata.get("type") == kind else {}
+
+
+def raw_enemy_metadata(enemy_name: str | None) -> dict:
+    if not enemy_name or normalized_database_key(enemy_name) in {"custom", "none"}:
+        return {}
+    return raw_enemies_database().get(enemy_name, {}) or {}
 
 
 def iter_upgrade_effects(metadata: dict):
@@ -427,6 +437,21 @@ def _cached_database_weapon(weapon_name: str, type_filter: str):
 def database_weapon(weapon_name: str, weapon_type_name: str):
     loaded = _cached_database_weapon(weapon_name, type_query_for_weapon_type(weapon_type_name))
     return copy.deepcopy(loaded) if isinstance(loaded, tuple(WEAPON_TYPES.values())) else None
+
+
+@lru_cache(maxsize=1)
+def enemy_names_for_ui() -> tuple[str, ...]:
+    return tuple(sorted(raw_enemies_database(), key=str.casefold))
+
+
+@lru_cache(maxsize=None)
+def _cached_database_enemy(enemy_name: str, level: int, steel_path: bool, empowered: bool):
+    return arsenal.get(enemy_name, type="enemy", context={"level": level, "steel_path": steel_path, "empowered": empowered})
+
+
+def database_enemy(enemy_name: str, *, level: int, steel_path: bool, empowered: bool):
+    loaded = _cached_database_enemy(enemy_name, level, steel_path, empowered)
+    return loaded.copy() if isinstance(loaded, Enemy) else None
 
 
 @lru_cache(maxsize=None)

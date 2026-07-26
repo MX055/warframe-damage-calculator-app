@@ -38,6 +38,7 @@ from .data import (
     database_max_stacks,
     database_rank_bounds,
     database_upgrade,
+    enemy_names_for_ui,
     is_faction_damage_stat,
     optimizer_excludes_upgrade_by_default,
     raw_riven_stats_database,
@@ -62,6 +63,7 @@ from .optimizer import OptimizeRequest, SlotSpec, optimize_build as run_optimize
 from .engine import (
     build_upgrade,
     clamp_number,
+    configured_enemy,
     configured_weapon,
     contribution_for_category,
     contribution_lookup_for_weapon,
@@ -80,6 +82,7 @@ from .engine import (
     parse_int,
     progenitor_upgrade,
     ranged_misc_metrics,
+    resistant_metrics,
     upgrade_field_input_config,
     upgrade_stat_rows,
     weakpoint_metrics,
@@ -209,6 +212,24 @@ def _custom_weapon_template(
     return json.dumps(entry, indent=2)
 
 
+def _custom_enemy_template() -> str:
+    return json.dumps(
+        {
+            "name": "Custom Enemy",
+            "faction": "Grineer",
+            "base_level": 1,
+            "runtime": {"level": 100, "steel_path": False, "empowered": False},
+            "stats": {"health": 300, "shields": 0, "armor": 500, "overguard": 0},
+            "bodyparts": {
+                "body": {"type": "normal", "multiplier": 1.0},
+                "head": {"type": "weakpoint", "multiplier": 3.0},
+            },
+            "modifiers": {"corrosive": 1.5, "impact": 1.5},
+        },
+        indent=2,
+    )
+
+
 def _custom_upgrade_templates(
     weapon_type_name: str = "Primary",
     weapon_category: str = "Rifle",
@@ -284,6 +305,18 @@ class CalculatorState(rx.State):
     selected_weapon: str = NONE
 
     weapon_options: list[str] = rx.field(default_factory=lambda: [NONE])
+    selected_enemy: str = NONE
+    enemy_options: list[str] = rx.field(default_factory=lambda: [NONE, CUSTOM])
+    custom_enemy_entry: str = ""
+    custom_enemy_placeholder: str = rx.field(default_factory=_custom_enemy_template)
+    enemy_level: int = 100
+    enemy_steel_path: bool = False
+    enemy_empowered: bool = False
+    enemy_identity_rows: list[DisplayRow] = rx.field(default_factory=list)
+    enemy_bodypart_rows: list[DisplayRow] = rx.field(default_factory=list)
+    enemy_modifier_rows: list[DisplayRow] = rx.field(default_factory=list)
+    enemy_result_metrics: list[MetricRow] = rx.field(default_factory=list)
+    enemy_error: str = ""
     attack_mode_options: list[str] = rx.field(default_factory=list)
     selected_attack_mode: str = ""
     evolution_labels: list[str] = rx.field(default_factory=list)
@@ -415,8 +448,10 @@ class CalculatorState(rx.State):
 
     main_result_metrics: list[MetricRow] = rx.field(default_factory=list)
     weakpoint_result_metrics: list[MetricRow] = rx.field(default_factory=list)
+    resistant_result_metrics: list[MetricRow] = rx.field(default_factory=list)
     ranged_result_metrics: list[MetricRow] = rx.field(default_factory=list)
     misc_result_metrics: list[MetricRow] = rx.field(default_factory=list)
+    result_metrics: list[MetricRow] = rx.field(default_factory=list)
     damage_result_rows: list[DamageResultRow] = rx.field(default_factory=list)
     contribution_result_rows: list[ContributionRow] = rx.field(default_factory=list)
     result_summary: str = ""
@@ -427,6 +462,18 @@ class CalculatorState(rx.State):
     @rx.var
     def custom_weapon(self) -> bool:
         return self.selected_weapon == CUSTOM
+
+    @rx.var
+    def custom_enemy(self) -> bool:
+        return self.selected_enemy == CUSTOM
+
+    @rx.var
+    def no_enemy(self) -> bool:
+        return self.selected_enemy == NONE
+
+    @rx.var
+    def show_enemy_inline_error(self) -> bool:
+        return bool(self.enemy_error and not (self.selected_enemy == CUSTOM and not self.custom_enemy_entry.strip()))
 
     @rx.var
     def no_weapon(self) -> bool:
@@ -475,6 +522,7 @@ class CalculatorState(rx.State):
         if self.initialized:
             return
         self.initialized = True
+        self._refresh_enemy_options()
         self._refresh_weapon_options()
         self._refresh_weapon_features()
         self._refresh_upgrade_options()
@@ -519,6 +567,28 @@ class CalculatorState(rx.State):
         self._refresh_upgrade_options()
         self._refresh_all_riven_field_limits()
         self._refresh_slot_field_options()
+        self._recalculate()
+
+    @rx.event
+    def set_enemy(self, value: str):
+        self.selected_enemy = value if value in self.enemy_options else NONE
+        self._recalculate()
+
+    @rx.event
+    def set_custom_enemy_entry(self, value: str):
+        self.custom_enemy_entry = value
+        self._recalculate()
+
+    @rx.event
+    def set_enemy_level(self, value: str):
+        self.enemy_level = max(1, min(parse_int(value, self.enemy_level), 9999))
+        self._recalculate()
+
+    @rx.event
+    def set_enemy_toggle(self, field_name: str, value: bool):
+        if field_name not in {"enemy_steel_path", "enemy_empowered"}:
+            return
+        setattr(self, field_name, bool(value))
         self._recalculate()
 
     @rx.event
@@ -843,6 +913,11 @@ class CalculatorState(rx.State):
                 progenitor_element=self.progenitor_element if self._supports_progenitor() else NO_EFFECT,
                 progenitor_value=self.progenitor_value,
                 external_fields={field.name: field.value for field in self.external_fields},
+                enemy_name=self.selected_enemy,
+                custom_enemy_entry=self.custom_enemy_entry,
+                enemy_level=self.enemy_level,
+                enemy_steel_path=self.enemy_steel_path,
+                enemy_empowered=self.enemy_empowered,
                 slots=[
                     SlotSpec(
                         index=index,
@@ -1133,6 +1208,11 @@ class CalculatorState(rx.State):
                 break
         self.external_fields = fields
         self._recalculate()
+
+    def _refresh_enemy_options(self):
+        self.enemy_options = [NONE, CUSTOM, *enemy_names_for_ui()]
+        if self.selected_enemy not in self.enemy_options:
+            self.selected_enemy = NONE
 
     def _refresh_weapon_options(self):
         self.weapon_options = [
@@ -1759,6 +1839,48 @@ class CalculatorState(rx.State):
             }
         )
 
+    def _target_enemy(self):
+        return configured_enemy(
+            self.selected_enemy,
+            custom_enemy=self.custom_enemy,
+            custom_entry=self.custom_enemy_entry if self.custom_enemy else None,
+            level=self.enemy_level,
+            steel_path=self.enemy_steel_path,
+            empowered=self.enemy_empowered,
+        )
+
+    def _refresh_enemy_preview(self, enemy) -> None:
+        if self.no_enemy:
+            self.enemy_identity_rows = []
+            self.enemy_bodypart_rows = []
+            self.enemy_modifier_rows = []
+            self.enemy_result_metrics = []
+            self.enemy_error = ""
+            return
+        data = enemy.data
+        effective = enemy.results.effective
+        self.enemy_identity_rows = [
+            DisplayRow("Name", str(data.name)),
+            DisplayRow("Faction", str(data.faction)),
+            DisplayRow("Base Level", f"{float(data.base_level):g}"),
+            DisplayRow("Current Level", str(self.enemy_level)),
+        ]
+        self.enemy_bodypart_rows = [
+            DisplayRow(f"{str(name).replace('_', ' ').title()} ({str(part.type).title()})", f"{float(part.multiplier):g}x")
+            for name, part in data.bodyparts.items()
+        ]
+        self.enemy_modifier_rows = [
+            DisplayRow(field_label(str(name)), f"{float(value):g}x")
+            for name, value in data.modifiers.items()
+        ]
+        self.enemy_result_metrics = [
+            MetricRow("Effective Health", f"{float(effective.health):,.2f}"),
+            MetricRow("Effective Shields", f"{float(effective.shields):,.2f}"),
+            MetricRow("Effective Armor", f"{float(effective.armor):,.0f}"),
+            MetricRow("Effective Overguard", f"{float(effective.overguard):,.2f}"),
+        ]
+        self.enemy_error = ""
+
     def _custom_base_stats(self) -> dict:
         if self.selected_weapon_type == "Melee":
             return {
@@ -1883,7 +2005,7 @@ class CalculatorState(rx.State):
         config = SLOT_CONFIGS[index]
         selected = self.slot_selected_upgrades[index]
         if selected == NONE:
-            return Upgrade({"name": NONE, "type": config["kind"], "stats": {}})
+            return Upgrade({"name": NONE, "type": config["kind"], "stats": {}, "runtime": {"rank": 0}})
         if selected == RIVEN:
             return self._custom_upgrade_from_fields(
                 RIVEN,
@@ -1908,11 +2030,21 @@ class CalculatorState(rx.State):
             condition=self.slot_conditions_enabled[index],
         )
         return loaded or Upgrade(
-            {"name": selected, "type": config["kind"], "stats": {}}
+            {"name": selected, "type": config["kind"], "stats": {}, "runtime": {"rank": 0}}
         )
 
     def _recalculate(self):
         try:
+            try:
+                target = self._target_enemy()
+                self._refresh_enemy_preview(target)
+            except Exception as exc:
+                self.enemy_identity_rows = []
+                self.enemy_bodypart_rows = []
+                self.enemy_modifier_rows = []
+                self.enemy_result_metrics = []
+                self.enemy_error = f"{type(exc).__name__}: {exc}"
+                raise
             if self.selected_weapon == NONE:
                 slot_upgrades = [self._slot_upgrade(index) for index in range(len(SLOT_CONFIGS))]
                 self.slot_stat_rows = [
@@ -1922,8 +2054,10 @@ class CalculatorState(rx.State):
                 self.slot_contributions = ["—" for _ in SLOT_CONFIGS]
                 self.main_result_metrics = []
                 self.weakpoint_result_metrics = []
+                self.resistant_result_metrics = []
                 self.ranged_result_metrics = []
                 self.misc_result_metrics = []
+                self.result_metrics = []
                 self.damage_result_rows = []
                 self.contribution_result_rows = []
                 self.result_summary = ""
@@ -1982,6 +2116,7 @@ class CalculatorState(rx.State):
                 evolutions=evolutions,
                 stance_combo=self.selected_stance_combo if self.stance_combo_available else None,
                 ability_strength=self._ability_strength_multiplier(),
+                target=target,
             )
             contribution_lookup = contribution_lookup_for_weapon(
                 weapon,
@@ -2006,18 +2141,11 @@ class CalculatorState(rx.State):
             self.slot_contributions = contributions
 
             self.main_result_metrics = main_metrics(weapon)
-            if self.selected_weapon_type == "Melee":
-                self.weakpoint_result_metrics = []
-                self.ranged_result_metrics = []
-                self.misc_result_metrics = []
-            else:
-                self.weakpoint_result_metrics = weakpoint_metrics(weapon)
-                self.misc_result_metrics = ranged_misc_metrics(weapon)
-                self.ranged_result_metrics = (
-                    self.main_result_metrics
-                    + self.weakpoint_result_metrics
-                    + self.misc_result_metrics
-                )
+            self.weakpoint_result_metrics = weakpoint_metrics(weapon)
+            self.resistant_result_metrics = resistant_metrics(weapon)
+            self.misc_result_metrics = [] if self.selected_weapon_type == "Melee" else ranged_misc_metrics(weapon)
+            self.result_metrics = self.main_result_metrics + self.weakpoint_result_metrics + self.resistant_result_metrics + self.misc_result_metrics
+            self.ranged_result_metrics = self.result_metrics
             self.damage_result_rows = effective_damage_rows(
                 weapon,
                 melee=self.selected_weapon_type == "Melee",
@@ -2033,8 +2161,10 @@ class CalculatorState(rx.State):
             self.slot_contributions = ["—" for _ in SLOT_CONFIGS]
             self.main_result_metrics = []
             self.weakpoint_result_metrics = []
+            self.resistant_result_metrics = []
             self.ranged_result_metrics = []
             self.misc_result_metrics = []
+            self.result_metrics = []
             self.damage_result_rows = []
             self.contribution_result_rows = []
             self.result_summary = ""

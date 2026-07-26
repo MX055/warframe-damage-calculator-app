@@ -145,7 +145,7 @@ def header() -> rx.Component:
         rx.vstack(
             rx.heading("Warframe Damage Calculator", size="7"),
             rx.text(
-                "Configure a weapon, build, and external buffs with deterministic DPH/DPS calculations.",
+                "Configure a weapon, enemy target, build, and external buffs with deterministic DPH/DPS calculations.",
                 class_name="header-subtitle",
             ),
             align="start",
@@ -163,6 +163,7 @@ def mobile_quick_nav() -> rx.Component:
     """Compact section navigation shown only on phone-sized screens."""
     return rx.hstack(
         rx.link("Weapon", href="#weapon", class_name="mobile-nav-link"),
+        rx.link("Enemy", href="#enemy", class_name="mobile-nav-link"),
         rx.link("Upgrades", href="#upgrades", class_name="mobile-nav-link"),
         rx.link("Optimizer", href="#optimizer", class_name="mobile-nav-link"),
         rx.link("Results", href="#results", class_name="mobile-nav-link"),
@@ -187,7 +188,7 @@ def read_me() -> rx.Component:
                     ),
                     rx.heading("Instructions", size="4"),
                     rx.text(
-                        "Select a weapon type and weapon, configure custom base stats when needed, fill the eight mod slots plus Exilus and Arcane, add external buffs, then inspect the live results."
+                        "Select a weapon and enemy target, configure custom entries when needed, fill the upgrade slots, add external buffs, then inspect the live results."
                     ),
                     rx.heading("Notes", size="4"),
                     rx.text(
@@ -536,6 +537,65 @@ def weapon_section() -> rx.Component:
         width="100%",
         gap="3",
         id="weapon",
+        class_name="page-section",
+    )
+
+
+def enemy_toggle_control(label: str, checked, on_change) -> rx.Component:
+    return labeled_control(
+        label,
+        rx.hstack(
+            rx.text(rx.cond(checked, "On", "Off"), class_name="enemy-toggle-state"),
+            rx.spacer(),
+            rx.switch(checked=checked, on_change=on_change),
+            width="100%",
+            align="center",
+            class_name="enemy-toggle-control",
+        ),
+    )
+
+
+def enemy_section() -> rx.Component:
+    return rx.vstack(
+        section_title("Enemy", "Choose a database target or define a custom enemy."),
+        panel(
+            rx.vstack(
+                select_control("Enemy", CalculatorState.enemy_options, CalculatorState.selected_enemy, CalculatorState.set_enemy),
+                rx.cond(
+                    CalculatorState.custom_enemy,
+                    database_entry_input(
+                        "Custom Enemy Entry",
+                        CalculatorState.custom_enemy_entry,
+                        CalculatorState.set_custom_enemy_entry,
+                        placeholder=CalculatorState.custom_enemy_placeholder,
+                        help_text="JSON",
+                        min_height="320px",
+                    ),
+                ),
+                rx.cond(
+                    (~CalculatorState.no_enemy) & (~CalculatorState.custom_enemy),
+                    rx.grid(
+                        number_control("Level", CalculatorState.enemy_level, CalculatorState.set_enemy_level, minimum=1, maximum=9999, step="1"),
+                        enemy_toggle_control("Steel Path", CalculatorState.enemy_steel_path, lambda value: CalculatorState.set_enemy_toggle("enemy_steel_path", value)),
+                        enemy_toggle_control("Empowered", CalculatorState.enemy_empowered, lambda value: CalculatorState.set_enemy_toggle("enemy_empowered", value)),
+                        columns=rx.breakpoints(initial="1", md="3"),
+                        gap="4",
+                        width="100%",
+                        class_name="form-grid enemy-runtime-grid",
+                    ),
+                ),
+                rx.cond(
+                    CalculatorState.show_enemy_inline_error,
+                    rx.box(rx.text("The enemy could not be loaded."), rx.code(CalculatorState.enemy_error), class_name="error-box", width="100%"),
+                ),
+                width="100%",
+                gap="3",
+                align="start",
+            )
+        ),
+        width="100%",
+        gap="3",
+        id="enemy",
         class_name="page-section",
     )
 
@@ -1352,11 +1412,7 @@ def results_section() -> rx.Component:
         rx.cond(
             CalculatorState.result_ready,
             rx.vstack(
-                rx.cond(
-                    CalculatorState.ranged_weapon,
-                    metric_grid(CalculatorState.ranged_result_metrics),
-                    metric_grid(CalculatorState.main_result_metrics),
-                ),
+                metric_grid(CalculatorState.result_metrics),
                 panel(result_tabs()),
                 width="100%",
                 gap="4",
@@ -1380,6 +1436,7 @@ def page() -> rx.Component:
             mobile_quick_nav(),
             read_me(),
             weapon_section(),
+            enemy_section(),
             upgrades_section(),
             optimizer_section(),
             results_section(),

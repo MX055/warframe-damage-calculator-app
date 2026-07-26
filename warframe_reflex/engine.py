@@ -4,7 +4,7 @@ import json
 from collections.abc import Mapping
 from typing import Iterable
 
-from warframe_damage_calculator import Build, Upgrade
+from warframe_damage_calculator import Build, Enemy, Upgrade
 from warframe_damage_calculator.core.dist import Dist
 
 from .constants import (
@@ -13,7 +13,7 @@ from .constants import (
     UPGRADE_SCALAR_FIELDS,
     WEAPON_TYPES,
 )
-from .data import database_weapon
+from .data import database_enemy, database_weapon
 from .models import ContributionRow, DamageResultRow, DisplayRow, MetricRow
 
 
@@ -131,6 +131,7 @@ def build_upgrade(name: str, values: dict[str, float | int]) -> Upgrade:
             "max_rank": 0,
             "compatibility": {},
             "stats": stats,
+            "runtime": {"rank": 0},
         }
     )
 
@@ -180,15 +181,50 @@ def custom_upgrade_from_entry(
         default_name=default_name,
         default_type=default_type,
     )
-    runtime = entry.pop("runtime", None)
+    runtime = entry.get("runtime")
     if not isinstance(entry.get("stats", {}), dict):
         raise ValueError(f"{default_name} stats must be a JSON object.")
-    upgrade = Upgrade(entry)
-    if runtime is not None:
-        if not isinstance(runtime, dict):
-            raise ValueError(f"{default_name} runtime must be a JSON object.")
-        upgrade.configure(runtime)
-    return upgrade
+    if runtime is not None and not isinstance(runtime, dict):
+        raise ValueError(f"{default_name} runtime must be a JSON object.")
+    entry["runtime"] = {**dict(runtime or {}), "rank": int((runtime or {}).get("rank", entry.get("max_rank", 0)))}
+    return Upgrade(entry)
+
+
+def custom_enemy_from_entry(text: str, *, level: int | None = None, steel_path: bool | None = None, empowered: bool | None = None) -> Enemy:
+    entry = parse_database_entry(text, default_name="Custom Enemy", default_type="enemy")
+    entry.pop("type", None)
+    for key in ("stats", "bodyparts", "modifiers"):
+        if key in entry and not isinstance(entry[key], Mapping):
+            raise ValueError(f"Custom Enemy {key} must be a JSON object.")
+    runtime = entry.get("runtime")
+    if runtime is not None and not isinstance(runtime, Mapping):
+        raise ValueError("Custom Enemy runtime must be a JSON object.")
+    entry["runtime"] = {"level": max(int(entry.get("base_level", 1)), 1), "steel_path": False, "empowered": False, **dict(runtime or {})}
+    if level is not None:
+        entry["runtime"]["level"] = level
+    if steel_path is not None:
+        entry["runtime"]["steel_path"] = steel_path
+    if empowered is not None:
+        entry["runtime"]["empowered"] = empowered
+    enemy = Enemy(entry)
+    pools = enemy.data.stats
+    if max(float(pools.health), float(pools.shields), float(pools.overguard)) <= 0:
+        raise ValueError("Custom Enemy must have nonzero health, shields, or overguard.")
+    enemy.results.resolve()
+    return enemy
+
+
+def configured_enemy(enemy_name: str, *, custom_enemy: bool, custom_entry: str | None, level: int, steel_path: bool, empowered: bool) -> Enemy:
+    if custom_enemy:
+        if not custom_entry or not custom_entry.strip():
+            raise ValueError("Custom Enemy JSON is required.")
+        return custom_enemy_from_entry(custom_entry)
+    if not enemy_name or enemy_name == "None":
+        return Enemy()
+    enemy = database_enemy(enemy_name, level=level, steel_path=steel_path, empowered=empowered)
+    if enemy is None:
+        raise LookupError(f"Could not load enemy: {enemy_name}")
+    return enemy
 
 
 def weapon_payload(weapon_type_name: str, base_stats: dict, *, name: str = "") -> dict:
@@ -379,12 +415,13 @@ def upgrade_stat_rows(
 
 def progenitor_upgrade(element: str, value: float, no_effect: str) -> Upgrade:
     if element == no_effect or value <= 0:
-        return Upgrade({"name": "Progenitor", "type": "progenitor", "stats": {}})
+        return Upgrade({"name": "Progenitor", "type": "progenitor", "stats": {}, "runtime": {"rank": 0}})
     return Upgrade(
         {
             "name": "Progenitor",
             "type": "progenitor",
             "stats": {element: [{"value": value, "mode": "proportional"}]},
+            "runtime": {"rank": 0},
         }
     )
 
@@ -416,6 +453,7 @@ def configured_weapon(
     evolutions: dict[int, int] | None = None,
     stance_combo: str | None = None,
     ability_strength: float | None = None,
+    target: Enemy | None = None,
 ):
     weapon_type = WEAPON_TYPES[weapon_type_name]
     if custom_weapon:
@@ -462,7 +500,9 @@ def configured_weapon(
         context["stance_combo"] = stance_combo
     if ability_strength is not None:
         context["ability_strength"] = float(ability_strength)
-    weapon.configure(Build(*upgrades), context=context or None)
+    weapon.configure(Build(*upgrades), target=target)
+    if context:
+        weapon.set(context)
     return weapon
 
 
@@ -502,6 +542,7 @@ def compute_contribution_proportions(
     weapon_type_name: str,
     base_stats: dict,
     upgrades: list[Upgrade],
+    target: Enemy | None = None,
 ) -> list[tuple[Upgrade, float]]:
     if not upgrades:
         return []
@@ -509,7 +550,7 @@ def compute_contribution_proportions(
     weapon_type = WEAPON_TYPES[weapon_type_name]
     payload = weapon_payload(weapon_type_name, base_stats)
     full_weapon = weapon_type(payload)
-    full_weapon.configure(Build(*upgrades))
+    full_weapon.configure(Build(*upgrades), target=target)
     total_dps = full_weapon.results.main.final.total_dps
     contributions: list[tuple[Upgrade, float]] = []
 
@@ -517,7 +558,7 @@ def compute_contribution_proportions(
         remaining = [item for other_index, item in enumerate(upgrades) if other_index != index]
         comparison_weapon = weapon_type(payload)
         if remaining:
-            comparison_weapon.configure(Build(*remaining))
+            comparison_weapon.configure(Build(*remaining), target=target)
         contributions.append(
             (upgrade, total_dps - comparison_weapon.results.main.final.total_dps)
         )
@@ -554,7 +595,7 @@ def contribution_lookup_for_weapon(
 
     if base_stats is None:
         return []
-    return compute_contribution_proportions(weapon_type_name, base_stats, upgrades)
+    return compute_contribution_proportions(weapon_type_name, base_stats, upgrades, target=weapon.target)
 
 
 def format_contribution(value: float | None) -> str:
@@ -601,6 +642,18 @@ def weakpoint_metrics(weapon) -> list[MetricRow]:
         MetricRow("Flat Weakpoint DPS", f"{average.flat_weakpoint_dps:,.2f}"),
         MetricRow("Flat Weakpoint DOTPS", f"{average.flat_weakpoint_dotps:,.2f}"),
         MetricRow("Total Weakpoint DPS", f"{average.total_weakpoint_dps:,.2f}"),
+    ]
+
+
+def resistant_metrics(weapon) -> list[MetricRow]:
+    average = weapon.results.main.final
+    return [
+        MetricRow("Flat Resistant DPH", f"{average.flat_resistant_dph:,.2f}"),
+        MetricRow("Flat Resistant DOTPH", f"{average.flat_resistant_dotph:,.2f}"),
+        MetricRow("Total Resistant DPH", f"{average.total_resistant_dph:,.2f}"),
+        MetricRow("Flat Resistant DPS", f"{average.flat_resistant_dps:,.2f}"),
+        MetricRow("Flat Resistant DOTPS", f"{average.flat_resistant_dotps:,.2f}"),
+        MetricRow("Total Resistant DPS", f"{average.total_resistant_dps:,.2f}"),
     ]
 
 

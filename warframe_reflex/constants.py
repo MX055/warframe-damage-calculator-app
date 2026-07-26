@@ -287,6 +287,12 @@ OPTIMIZE_MAXIMIZE_TARGETS = {
     "Total Weakpoint DPH": "total_weakpoint_dph",
     "Flat Weakpoint DPH": "flat_weakpoint_dph",
     "Flat Weakpoint DOTPH": "flat_weakpoint_dotph",
+    "Total Resistant DPS": "total_resistant_dps",
+    "Flat Resistant DPS": "flat_resistant_dps",
+    "Flat Resistant DOTPS": "flat_resistant_dotps",
+    "Total Resistant DPH": "total_resistant_dph",
+    "Flat Resistant DPH": "flat_resistant_dph",
+    "Flat Resistant DOTPH": "flat_resistant_dotph",
 }
 OPTIMIZE_MAXIMIZE_OPTIONS = tuple(OPTIMIZE_MAXIMIZE_TARGETS)
 DEFAULT_OPTIMIZE_MAXIMIZE = "Balanced (DPS · DPH)"
