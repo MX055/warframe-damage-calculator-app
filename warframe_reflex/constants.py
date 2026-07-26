@@ -18,7 +18,9 @@ WEAPON_CATEGORY_TYPES = {
 }
 
 WEAPON_TYPE_OPTIONS = list(WEAPON_CATEGORY_TYPES)
-MELEE_COMBO_OPTIONS = tuple(f"{value}x" for value in range(13))
+INITIAL_COMBO_OPTION = "Initial Combo"
+INITIAL_COMBO_RUNTIME = "initial_combo"
+MELEE_COMBO_OPTIONS = (INITIAL_COMBO_OPTION, *(f"{value}x" for value in range(13)))
 
 DAMAGE_TYPES = (
     "impact",

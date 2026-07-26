@@ -10,6 +10,7 @@ from warframe_damage_calculator import Build, Upgrade
 from .constants import (
     BALANCED_MAXIMIZE_TARGETS,
     DEFAULT_OPTIMIZE_MAXIMIZE,
+    INITIAL_COMBO_RUNTIME,
     NO_EFFECT,
     OPTIMIZE_MAXIMIZE_TARGETS,
     RIVEN_NON_NEGATIVE_STATS,
@@ -30,7 +31,7 @@ from .data import (
     upgrade_names_for_ui,
     weapon_evolution_perk_choices,
 )
-from .engine import build_upgrade, configured_enemy, configured_weapon, custom_upgrade_from_entry, is_non_empty_upgrade, parse_database_entry, progenitor_upgrade
+from .engine import build_upgrade, combo_multiplier_from_initial_combo, configured_enemy, configured_weapon, custom_upgrade_from_entry, is_non_empty_upgrade, parse_database_entry, progenitor_upgrade
 
 NONE = "None"
 CUSTOM = "Custom"
@@ -93,7 +94,7 @@ class OptimizeRequest:
     custom_weapon_entry: str
     attack_mode: str
     evolutions: dict[int, int]
-    combo_count: int
+    combo_count: int | str
     evolution_runtime: dict[str, bool | int]
     progenitor_element: str
     progenitor_value: float
@@ -309,10 +310,13 @@ def optimize_build(request: OptimizeRequest, progress: ProgressCallback | None =
         optimizer_build.upgrades = upgrades
         if request.weapon_type == "Melee":
             optimizer_weapon.data.runtime.stance_combo = stance_combo
-            optimizer_weapon.data.runtime.combo = request.combo_count
+            optimizer_weapon.data.runtime.combo = 1 if request.combo_count == INITIAL_COMBO_RUNTIME else int(request.combo_count)
         optimizer_weapon.data.runtime.evolutions = dict(current_evolutions)
         optimizer_weapon.data.runtime.update(request.evolution_runtime)
         optimizer_weapon.results.resolve(validate_cycles=False)
+        if request.weapon_type == "Melee" and request.combo_count == INITIAL_COMBO_RUNTIME:
+            optimizer_weapon.data.runtime.combo = combo_multiplier_from_initial_combo(optimizer_weapon.results.main.effective.initial_combo)
+            optimizer_weapon.results.resolve(validate_cycles=False)
         result = score_maximize_target(optimizer_weapon.results.main.final, maximize_target)
         score_cache[key] = result
         return result

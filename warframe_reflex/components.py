@@ -7,6 +7,7 @@ import reflex as rx
 from .constants import (
     ARCANE_SLOT_INDEX,
     EXILUS_SLOT_INDEX,
+    INITIAL_COMBO_OPTION,
     MELEE_COMBO_OPTIONS,
     MOD_SLOT_INDICES,
     NO_EFFECT,
@@ -20,7 +21,7 @@ from .constants import (
     STANCE_SLOT_INDEX,
     WEAPON_TYPE_OPTIONS,
 )
-from .models import ContributionRow, DamageResultRow, DisplayRow, EditorField, MetricRow, RuntimeStackField, RuntimeToggleField
+from .models import ClearBuffRow, ContributionRow, DamageResultRow, DisplayRow, EditorField, MetricRow, RuntimeStackField, RuntimeToggleField
 from .state import CUSTOM, NONE, RIVEN, CalculatorState
 
 
@@ -486,17 +487,17 @@ def incarnon_toggle_control(field: rx.Var[RuntimeToggleField]) -> rx.Component:
 
 
 def incarnon_stack_control(field: rx.Var[RuntimeStackField]) -> rx.Component:
-    return select_control(field.label, field.options, field.value, lambda value: CalculatorState.set_evolution_stacks(field.name, value))
+    return number_control(field.label, field.value, lambda value: CalculatorState.set_evolution_stacks(field.name, value), minimum=0, maximum=field.max_value, step="1")
 
 
 def incarnon_runtime_controls() -> rx.Component:
     return rx.cond(
-        (CalculatorState.evolution_condition_toggles.length() > 0) | (CalculatorState.evolution_stack_selectors.length() > 0),
+        (CalculatorState.evolution_condition_toggles.length() > 0) | (CalculatorState.evolution_stack_fields.length() > 0),
         rx.vstack(
             rx.text("Incarnon Conditions", class_name="optimizer-group-title"),
             rx.grid(
                 rx.foreach(CalculatorState.evolution_condition_toggles, incarnon_toggle_control),
-                rx.foreach(CalculatorState.evolution_stack_selectors, incarnon_stack_control),
+                rx.foreach(CalculatorState.evolution_stack_fields, incarnon_stack_control),
                 columns=rx.breakpoints(initial="1", md="2"),
                 gap="4",
                 width="100%",
@@ -542,7 +543,12 @@ def weapon_section() -> rx.Component:
                 ),
                 rx.cond(
                     CalculatorState.melee_weapon & (~CalculatorState.no_weapon),
-                    select_control("Combo Count", MELEE_COMBO_OPTIONS, CalculatorState.melee_combo_count, CalculatorState.set_melee_combo_count),
+                    rx.vstack(
+                        select_control("Combo Count", MELEE_COMBO_OPTIONS, CalculatorState.melee_combo_count, CalculatorState.set_melee_combo_count),
+                        rx.cond(CalculatorState.melee_combo_count == INITIAL_COMBO_OPTION, rx.text("Uses the build's modded Initial Combo to determine the heavy-attack multiplier.", class_name="optimizer-help")),
+                        width="100%",
+                        gap="1",
+                    ),
                 ),
                 rx.cond(
                     CalculatorState.stance_combo_available,
@@ -975,7 +981,7 @@ def clear_upgrade_row(index: int) -> rx.Component:
             rx.text(config["label"], class_name="clear-build-slot"),
             rx.text(CalculatorState.slot_selected_upgrades[index], class_name="clear-build-upgrade"),
             rx.button("×", on_click=CalculatorState.remove_build_upgrade(index), disabled=CalculatorState.optimize_running, variant="ghost", class_name="clear-build-remove", title="Remove this upgrade"),
-            columns="74px 70px minmax(120px, 1fr) 30px",
+            columns="74px 62px minmax(0, 1fr) 30px",
             align="center",
             width="100%",
             class_name="clear-build-row",
@@ -984,24 +990,36 @@ def clear_upgrade_row(index: int) -> rx.Component:
     )
 
 
+def clear_external_buff_row(field: rx.Var[ClearBuffRow]) -> rx.Component:
+    return rx.grid(
+        rx.hstack(
+            rx.checkbox(checked=field.keep, on_change=lambda value: CalculatorState.set_clear_keep_buff(field.name, value), disabled=CalculatorState.optimize_running),
+            rx.text("Keep", class_name="clear-build-keep-label"),
+            align="center",
+            gap="2",
+        ),
+        rx.text("Buff", class_name="clear-build-slot"),
+        rx.text(field.label, class_name="clear-build-upgrade"),
+        rx.button("×", on_click=CalculatorState.remove_external_field(field.name), disabled=CalculatorState.optimize_running, variant="ghost", class_name="clear-build-remove", title="Remove this external buff"),
+        columns="74px 62px minmax(0, 1fr) 30px",
+        align="center",
+        width="100%",
+        class_name="clear-build-row",
+    )
+
+
 def clear_build_menu() -> rx.Component:
     return rx.accordion.root(
         rx.accordion.item(
             header=rx.hstack(rx.text("Clear", class_name="clear-build-title"), rx.badge("Build + buffs", variant="soft", color_scheme="gray"), width="100%", align="center", gap="2"),
             content=rx.vstack(
-                rx.text("Mark upgrades to keep, or remove one directly.", class_name="optimizer-help"),
+                rx.text("Mark upgrades or buffs to keep, or remove one directly.", class_name="optimizer-help"),
                 rx.cond(
-                    CalculatorState.has_equipped_upgrades,
-                    rx.vstack(*[clear_upgrade_row(index) for index in OPTIMIZER_SLOT_ORDER], width="100%", gap="0", class_name="clear-build-list"),
-                    rx.text("No upgrades equipped.", class_name="empty-text"),
+                    CalculatorState.has_build_or_buffs,
+                    rx.vstack(*[clear_upgrade_row(index) for index in OPTIMIZER_SLOT_ORDER], rx.foreach(CalculatorState.clear_external_buff_rows, clear_external_buff_row), width="100%", gap="0", class_name="clear-build-list"),
+                    rx.text("The build and external buffs are empty.", class_name="empty-text"),
                 ),
-                rx.hstack(
-                    rx.checkbox(checked=CalculatorState.clear_keep_buffs, on_change=CalculatorState.set_clear_keep_buffs, disabled=CalculatorState.optimize_running),
-                    rx.text("Keep external buffs", class_name="clear-build-keep-label"),
-                    align="center",
-                    gap="2",
-                ),
-                rx.button(rx.cond(CalculatorState.clear_keep_buffs, "Clear build (keep buffs)", "Clear build & buffs"), on_click=CalculatorState.clear_build_and_buffs, disabled=(~CalculatorState.has_build_or_buffs) | CalculatorState.optimize_running, color_scheme="red", variant="soft", width="100%"),
+                rx.button(rx.cond(CalculatorState.clear_has_kept_items, "Clear unmarked items", "Clear build & buffs"), on_click=CalculatorState.clear_build_and_buffs, disabled=(~CalculatorState.has_build_or_buffs) | CalculatorState.optimize_running, color_scheme="red", variant="soft", width="100%"),
                 width="100%",
                 align="start",
                 gap="3",

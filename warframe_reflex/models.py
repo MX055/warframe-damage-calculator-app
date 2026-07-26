@@ -24,8 +24,15 @@ class RuntimeToggleField:
 class RuntimeStackField:
     name: str
     label: str
-    value: str
-    options: list[str]
+    value: int
+    max_value: int
+
+
+@dataclass
+class ClearBuffRow:
+    name: str
+    label: str
+    keep: bool
 
 
 @dataclass

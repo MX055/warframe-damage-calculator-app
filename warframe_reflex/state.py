@@ -15,6 +15,8 @@ from .constants import (
     DEFAULT_DAMAGE_TYPES,
     DEFAULT_OPTIMIZE_MAXIMIZE,
     FIELD_WEAPON_RULES,
+    INITIAL_COMBO_OPTION,
+    INITIAL_COMBO_RUNTIME,
     MELEE_COMBO_OPTIONS,
     MOD_FIELD,
     NO_EFFECT,
@@ -90,6 +92,7 @@ from .engine import (
     weakpoint_metrics,
 )
 from .models import (
+    ClearBuffRow,
     ContributionRow,
     DamageResultRow,
     DisplayRow,
@@ -369,7 +372,7 @@ class CalculatorState(rx.State):
     evolution_options: list[list[str]] = rx.field(default_factory=list)
     evolution_selections: list[str] = rx.field(default_factory=list)
     evolution_condition_toggles: list[RuntimeToggleField] = rx.field(default_factory=list)
-    evolution_stack_selectors: list[RuntimeStackField] = rx.field(default_factory=list)
+    evolution_stack_fields: list[RuntimeStackField] = rx.field(default_factory=list)
     melee_combo_count: str = "12x"
     mod_options: list[str] = rx.field(default_factory=lambda: [NONE])
     stance_options: list[str] = rx.field(default_factory=lambda: [NONE])
@@ -474,7 +477,7 @@ class CalculatorState(rx.State):
     )
     slot_editor_open: list[bool] = rx.field(default_factory=lambda: [False for _ in SLOT_CONFIGS])
     clear_keep_slots: list[bool] = rx.field(default_factory=lambda: [False for _ in SLOT_CONFIGS])
-    clear_keep_buffs: bool = False
+    clear_keep_buff_fields: list[str] = rx.field(default_factory=list)
     optimize_find_riven: bool = False
     optimize_find_evolutions: bool = False
     optimize_maximize_target: str = DEFAULT_OPTIMIZE_MAXIMIZE
@@ -543,6 +546,15 @@ class CalculatorState(rx.State):
         return any(selected != NONE for selected in self.slot_selected_upgrades) or bool(self.external_fields)
 
     @rx.var
+    def clear_has_kept_items(self) -> bool:
+        return any(self.clear_keep_slots) or bool(self.clear_keep_buff_fields)
+
+    @rx.var
+    def clear_external_buff_rows(self) -> list[ClearBuffRow]:
+        kept = set(self.clear_keep_buff_fields)
+        return [ClearBuffRow(field.name, field.label, field.name in kept) for field in self.external_fields]
+
+    @rx.var
     def optimizer_enabled(self) -> bool:
         return self.selected_weapon != NONE and self.selected_enemy != NONE
 
@@ -590,8 +602,22 @@ class CalculatorState(rx.State):
     def _evolution_runtime_context(self) -> dict[str, bool | int]:
         return {
             **{field.name: bool(field.value) for field in self.evolution_condition_toggles},
-            **{field.name: parse_int(field.value) for field in self.evolution_stack_selectors},
+            **{field.name: int(field.value) for field in self.evolution_stack_fields},
         }
+
+    def _combo_runtime_value(self) -> int | str:
+        return INITIAL_COMBO_RUNTIME if self.melee_combo_count == INITIAL_COMBO_OPTION else parse_int(self.melee_combo_count, 12)
+
+    def _selected_attack_category(self) -> str:
+        weapon_name = None if self.custom_weapon or self.selected_weapon == NONE else self.selected_weapon
+        custom_metadata = self._custom_weapon_metadata() if self.custom_weapon else None
+        return selected_attack_category(weapon_name, self.selected_attack_mode, custom_metadata=custom_metadata)
+
+    def _set_default_melee_combo_for_selected_attack(self):
+        if self.selected_weapon_type != "Melee" or self.selected_weapon == NONE:
+            self.melee_combo_count = "12x"
+            return
+        self.melee_combo_count = INITIAL_COMBO_OPTION if stance_combo_key_for_attack_category(self._selected_attack_category()) == "heavy" else "12x"
 
     def _clear_optimizer_result(self):
         self.optimize_status = ""
@@ -628,10 +654,13 @@ class CalculatorState(rx.State):
             keep_slots[index] = False
         self.clear_keep_slots = keep_slots
         self.slot_editor_open = [False for _ in SLOT_CONFIGS]
-        if not (keep_marked and self.clear_keep_buffs):
+        if keep_marked:
+            keep_buff_names = set(self.clear_keep_buff_fields)
+            self.external_fields = [field for field in self.external_fields if field.name in keep_buff_names]
+            self.clear_keep_buff_fields = [field.name for field in self.external_fields]
+        else:
             self.external_fields = []
-        if not keep_marked:
-            self.clear_keep_buffs = False
+            self.clear_keep_buff_fields = []
         self._refresh_external_field_options()
 
     def _reset_for_weapon_change(self):
@@ -639,7 +668,7 @@ class CalculatorState(rx.State):
         self._reset_optimizer_settings()
         self.melee_combo_count = "12x"
         self.evolution_condition_toggles = []
-        self.evolution_stack_selectors = []
+        self.evolution_stack_fields = []
 
     @rx.event
     def initialize(self):
@@ -693,6 +722,7 @@ class CalculatorState(rx.State):
         self._reset_for_weapon_change()
         self.selected_weapon = selected_weapon
         self._refresh_weapon_features()
+        self._set_default_melee_combo_for_selected_attack()
         self._refresh_upgrade_options()
         self._refresh_all_riven_field_limits()
         self._refresh_slot_field_options()
@@ -726,9 +756,12 @@ class CalculatorState(rx.State):
 
     @rx.event
     def set_custom_weapon_entry(self, value: str):
+        previous_category = self._selected_attack_category()
         self.custom_weapon_entry = value
         self._invalidate_optimizer_result()
         self._refresh_weapon_features()
+        if self._selected_attack_category() != previous_category:
+            self._set_default_melee_combo_for_selected_attack()
         self._refresh_upgrade_options()
         self._refresh_all_riven_field_limits()
         self._refresh_slot_field_options()
@@ -751,6 +784,7 @@ class CalculatorState(rx.State):
         if value not in self.attack_mode_options:
             return
         self.selected_attack_mode = value
+        self._set_default_melee_combo_for_selected_attack()
         self._invalidate_optimizer_result()
         self._refresh_upgrade_options()
         self._refresh_all_riven_field_limits()
@@ -789,11 +823,11 @@ class CalculatorState(rx.State):
 
     @rx.event
     def set_evolution_stacks(self, name: str, value: str):
-        fields = copy.deepcopy(self.evolution_stack_selectors)
+        fields = copy.deepcopy(self.evolution_stack_fields)
         for field in fields:
-            if field.name == name and value in field.options:
-                field.value = value
-                self.evolution_stack_selectors = fields
+            if field.name == name:
+                field.value = max(0, min(parse_int(value, field.value), field.max_value))
+                self.evolution_stack_fields = fields
                 self._invalidate_optimizer_result()
                 self._recalculate()
                 return
@@ -890,8 +924,13 @@ class CalculatorState(rx.State):
         self.clear_keep_slots = keep_slots
 
     @rx.event
-    def set_clear_keep_buffs(self, value: bool):
-        self.clear_keep_buffs = bool(value)
+    def set_clear_keep_buff(self, field_name: str, value: bool):
+        if not any(field.name == field_name for field in self.external_fields):
+            return
+        names = [name for name in self.clear_keep_buff_fields if name != field_name]
+        if value:
+            names.append(field_name)
+        self.clear_keep_buff_fields = names
 
     @rx.event
     def clear_build_and_buffs(self):
@@ -1126,7 +1165,7 @@ class CalculatorState(rx.State):
                 custom_weapon_entry=self.custom_weapon_entry,
                 attack_mode=self.selected_attack_mode,
                 evolutions=evolutions,
-                combo_count=parse_int(self.melee_combo_count, 12),
+                combo_count=self._combo_runtime_value(),
                 evolution_runtime=self._evolution_runtime_context(),
                 progenitor_element=self.progenitor_element if self._supports_progenitor() else NO_EFFECT,
                 progenitor_value=self.progenitor_value,
@@ -1446,6 +1485,7 @@ class CalculatorState(rx.State):
             for field in copy.deepcopy(self.external_fields)
             if field.name != field_name
         ]
+        self.clear_keep_buff_fields = [name for name in self.clear_keep_buff_fields if name != field_name]
         self._invalidate_optimizer_result()
         self._refresh_external_field_options()
         self._recalculate()
@@ -1493,17 +1533,14 @@ class CalculatorState(rx.State):
     def _refresh_evolution_runtime_controls(self):
         if self.selected_weapon == NONE:
             self.evolution_condition_toggles = []
-            self.evolution_stack_selectors = []
+            self.evolution_stack_fields = []
             return
         custom_metadata = self._custom_weapon_metadata() if self.custom_weapon else None
         toggle_specs, stack_specs = weapon_evolution_runtime_controls(None if self.custom_weapon else self.selected_weapon, self._selected_evolutions(), custom_metadata=custom_metadata)
         current_toggles = {field.name: field.value for field in self.evolution_condition_toggles}
-        current_stacks = {field.name: field.value for field in self.evolution_stack_selectors}
+        current_stacks = {field.name: field.value for field in self.evolution_stack_fields}
         self.evolution_condition_toggles = [RuntimeToggleField(spec["name"], spec["label"], current_toggles.get(spec["name"], True)) for spec in toggle_specs]
-        self.evolution_stack_selectors = [
-            RuntimeStackField(spec["name"], spec["label"], current_stacks.get(spec["name"], str(spec["maximum"])) if current_stacks.get(spec["name"], str(spec["maximum"])) in [str(value) for value in range(spec["maximum"] + 1)] else str(spec["maximum"]), [str(value) for value in range(spec["maximum"] + 1)])
-            for spec in stack_specs
-        ]
+        self.evolution_stack_fields = [RuntimeStackField(spec["name"], spec["label"], max(0, min(int(current_stacks.get(spec["name"], spec["maximum"])), spec["maximum"])), spec["maximum"]) for spec in stack_specs]
 
     def _refresh_weapon_features(self):
         if self.selected_weapon == NONE:
@@ -2439,7 +2476,7 @@ class CalculatorState(rx.State):
                 custom_entry=self.custom_weapon_entry if self.custom_weapon else None,
                 selected_mode=self.selected_attack_mode or None,
                 evolutions=evolutions,
-                combo=parse_int(self.melee_combo_count, 12) if self.melee_weapon else None,
+                combo=self._combo_runtime_value() if self.melee_weapon else None,
                 runtime_conditions=self._evolution_runtime_context(),
                 stance_combo=self.selected_stance_combo if self.stance_combo_available else None,
                 ability_strength=self._ability_strength_multiplier(),

@@ -479,10 +479,10 @@ textarea.database-entry-input::placeholder {
 }
 
 .incarnon-runtime-panel {
-  padding: 0.85rem;
-  border: 1px solid var(--gray-a5);
-  border-radius: 10px;
-  background: var(--gray-a2);
+  padding: 0.9rem;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--panel-soft);
 }
 
 .slot-editor-shell {
@@ -634,8 +634,8 @@ textarea.database-entry-input::placeholder {
 }
 
 .clear-build-menu {
-  width: min(100%, 440px);
-  flex: 0 1 440px;
+  width: min(100%, 560px);
+  flex: 0 1 560px;
   overflow: hidden;
   border: 1px solid var(--border) !important;
   border-radius: 12px;
@@ -682,11 +682,11 @@ textarea.database-entry-input::placeholder {
 
 .clear-build-upgrade {
   min-width: 0;
-  overflow: hidden;
   font-size: 0.78rem;
   font-weight: 600;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 .clear-build-remove {
@@ -854,7 +854,7 @@ textarea.database-entry-input::placeholder {
   }
 
   .clear-build-row {
-    grid-template-columns: 68px 60px minmax(90px, 1fr) 30px !important;
+    grid-template-columns: 68px 54px minmax(0, 1fr) 30px !important;
   }
 
   .optimizer-menu-content {

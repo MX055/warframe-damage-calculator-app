@@ -6,9 +6,11 @@ from typing import Iterable
 
 from warframe_damage_calculator import Build, Enemy, Upgrade
 from warframe_damage_calculator.core.dist import Dist
+from warframe_damage_calculator.utils.constants import COMBO_HIT_INTERVAL, MAX_COMBO_MULTIPLIER
 
 from .constants import (
     DAMAGE_TYPES,
+    INITIAL_COMBO_RUNTIME,
     UPGRADE_BOOL_FIELDS,
     UPGRADE_SCALAR_FIELDS,
     WEAPON_TYPES,
@@ -33,6 +35,10 @@ def parse_int(value: object, default: int = 0) -> int:
         return int(float(value))
     except (TypeError, ValueError):
         return default
+
+
+def combo_multiplier_from_initial_combo(value: object) -> int:
+    return max(1, min(MAX_COMBO_MULTIPLIER, parse_int(value) // COMBO_HIT_INTERVAL + 1))
 
 
 def clamp_number(
@@ -481,7 +487,7 @@ def configured_weapon(
     custom_entry: str | None = None,
     selected_mode: str | None = None,
     evolutions: dict[int, int] | None = None,
-    combo: int | None = None,
+    combo: int | str | None = None,
     runtime_conditions: Mapping[str, object] | None = None,
     stance_combo: str | None = None,
     ability_strength: float | None = None,
@@ -516,6 +522,7 @@ def configured_weapon(
             raise LookupError(f"Could not load weapon: {selected_weapon_name}")
 
     context: dict[str, object] = {}
+    use_initial_combo = combo == INITIAL_COMBO_RUNTIME
     if selected_mode:
         wanted = "_".join(selected_mode.casefold().replace("-", " ").split())
         context["attack"] = next(
@@ -529,7 +536,7 @@ def configured_weapon(
     if evolutions:
         context["evolutions"] = evolutions
     if combo is not None:
-        context["combo"] = max(0, min(int(combo), 12))
+        context["combo"] = 1 if use_initial_combo else max(0, min(int(combo), MAX_COMBO_MULTIPLIER))
     if runtime_conditions:
         context.update(runtime_conditions)
     if stance_combo:
@@ -539,6 +546,8 @@ def configured_weapon(
     weapon.configure(Build(*upgrades), target=target)
     if context:
         weapon.set(context)
+    if use_initial_combo:
+        weapon.set({"combo": combo_multiplier_from_initial_combo(weapon.results.main.effective.initial_combo)})
     return weapon
 
 
