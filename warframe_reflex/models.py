@@ -14,6 +14,21 @@ class EditorField:
 
 
 @dataclass
+class RuntimeToggleField:
+    name: str
+    label: str
+    value: bool = True
+
+
+@dataclass
+class RuntimeStackField:
+    name: str
+    label: str
+    value: str
+    options: list[str]
+
+
+@dataclass
 class DisplayRow:
     label: str
     value: str

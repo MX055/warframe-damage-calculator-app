@@ -481,6 +481,8 @@ def configured_weapon(
     custom_entry: str | None = None,
     selected_mode: str | None = None,
     evolutions: dict[int, int] | None = None,
+    combo: int | None = None,
+    runtime_conditions: Mapping[str, object] | None = None,
     stance_combo: str | None = None,
     ability_strength: float | None = None,
     target: Enemy | None = None,
@@ -526,6 +528,10 @@ def configured_weapon(
         )
     if evolutions:
         context["evolutions"] = evolutions
+    if combo is not None:
+        context["combo"] = max(0, min(int(combo), 12))
+    if runtime_conditions:
+        context.update(runtime_conditions)
     if stance_combo:
         context["stance_combo"] = stance_combo
     if ability_strength is not None:

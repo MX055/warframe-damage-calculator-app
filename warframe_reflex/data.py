@@ -197,6 +197,55 @@ def weapon_evolution_perk_choices(weapon_name: str | None, *, custom_metadata: d
     return choices
 
 
+def weapon_evolution_runtime_controls(weapon_name: str | None, selected_evolutions: dict[int, int], *, custom_metadata: dict | None = None) -> tuple[list[dict], list[dict]]:
+    metadata = custom_metadata if custom_metadata is not None else raw_weapon_metadata("", weapon_name)
+    evolutions = (metadata or {}).get("evolutions") or {}
+    selected_perks = []
+    tier_one = evolutions.get("1") or evolutions.get(1)
+    if isinstance(tier_one, dict):
+        perk_one = tier_one.get("1") or tier_one.get(1)
+        if isinstance(perk_one, dict):
+            selected_perks.append(perk_one)
+    for tier, perk in selected_evolutions.items():
+        if int(tier) == 1:
+            continue
+        tier_data = evolutions.get(str(tier)) or evolutions.get(tier)
+        perk_data = (tier_data.get(str(perk)) or tier_data.get(perk)) if isinstance(tier_data, dict) else None
+        if isinstance(perk_data, dict):
+            selected_perks.append(perk_data)
+
+    toggles: dict[str, dict] = {}
+    stacks: dict[str, dict] = {}
+    for perk in selected_perks:
+        for effects in (perk.get("stats") or {}).values():
+            for effect in effects if isinstance(effects, list) else [effects]:
+                if not isinstance(effect, dict):
+                    continue
+                stack = effect.get("stacks")
+                if isinstance(stack, dict) and stack.get("when") is not None:
+                    name = str(stack["when"])
+                    try:
+                        maximum = max(0, int(float(stack.get("max", 0))))
+                    except (TypeError, ValueError):
+                        maximum = 0
+                    label = name.replace("_", " ").strip().title()
+                    if label.casefold().startswith("on "):
+                        label = label[3:]
+                    stacks[name] = {"name": name, "label": f"{label} Stacks", "maximum": maximum}
+                    toggles.pop(name, None)
+                    continue
+                condition = effect.get("when")
+                if condition is not None:
+                    name = str(condition)
+                    if name in stacks:
+                        continue
+                    label = name.replace("_", " ").strip().title()
+                    if label.casefold().startswith("on "):
+                        label = label[3:]
+                    toggles[name] = {"name": name, "label": label}
+    return list(toggles.values()), list(stacks.values())
+
+
 def _selected_attack(metadata: dict, selected_mode: str | None) -> dict:
     attacks = metadata.get("attacks") or {}
     wanted = normalized_database_key(selected_mode)

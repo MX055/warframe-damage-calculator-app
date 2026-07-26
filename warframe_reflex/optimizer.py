@@ -93,6 +93,8 @@ class OptimizeRequest:
     custom_weapon_entry: str
     attack_mode: str
     evolutions: dict[int, int]
+    combo_count: int
+    evolution_runtime: dict[str, bool | int]
     progenitor_element: str
     progenitor_value: float
     external_fields: dict[str, float]
@@ -229,6 +231,8 @@ def optimize_build(request: OptimizeRequest, progress: ProgressCallback | None =
         request.weapon_type, request.weapon_name, custom_weapon=request.custom_weapon, base_stats={}, upgrades=[],
         custom_entry=request.custom_weapon_entry if request.custom_weapon else None,
         selected_mode=request.attack_mode or None, evolutions=request.evolutions or None,
+        combo=request.combo_count if request.weapon_type == "Melee" else None,
+        runtime_conditions=request.evolution_runtime,
         stance_combo=stance_combo if request.weapon_type == "Melee" else None,
         ability_strength=request.ability_strength,
         target=target,
@@ -305,7 +309,9 @@ def optimize_build(request: OptimizeRequest, progress: ProgressCallback | None =
         optimizer_build.upgrades = upgrades
         if request.weapon_type == "Melee":
             optimizer_weapon.data.runtime.stance_combo = stance_combo
+            optimizer_weapon.data.runtime.combo = request.combo_count
         optimizer_weapon.data.runtime.evolutions = dict(current_evolutions)
+        optimizer_weapon.data.runtime.update(request.evolution_runtime)
         optimizer_weapon.results.resolve(validate_cycles=False)
         result = score_maximize_target(optimizer_weapon.results.main.final, maximize_target)
         score_cache[key] = result

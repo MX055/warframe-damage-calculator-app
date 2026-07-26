@@ -7,6 +7,7 @@ import reflex as rx
 from .constants import (
     ARCANE_SLOT_INDEX,
     EXILUS_SLOT_INDEX,
+    MELEE_COMBO_OPTIONS,
     MOD_SLOT_INDICES,
     NO_EFFECT,
     OPTIMIZER_SLOT_ORDER,
@@ -19,7 +20,7 @@ from .constants import (
     STANCE_SLOT_INDEX,
     WEAPON_TYPE_OPTIONS,
 )
-from .models import ContributionRow, DamageResultRow, DisplayRow, EditorField, MetricRow
+from .models import ContributionRow, DamageResultRow, DisplayRow, EditorField, MetricRow, RuntimeStackField, RuntimeToggleField
 from .state import CUSTOM, NONE, RIVEN, CalculatorState
 
 
@@ -470,6 +471,43 @@ def custom_base_stats() -> rx.Component:
     )
 
 
+def incarnon_toggle_control(field: rx.Var[RuntimeToggleField]) -> rx.Component:
+    return labeled_control(
+        field.label,
+        rx.hstack(
+            rx.text(rx.cond(field.value, "On", "Off"), class_name="enemy-toggle-state"),
+            rx.spacer(),
+            rx.switch(checked=field.value, on_change=lambda value: CalculatorState.set_evolution_condition(field.name, value)),
+            width="100%",
+            align="center",
+            class_name="enemy-toggle-control",
+        ),
+    )
+
+
+def incarnon_stack_control(field: rx.Var[RuntimeStackField]) -> rx.Component:
+    return select_control(field.label, field.options, field.value, lambda value: CalculatorState.set_evolution_stacks(field.name, value))
+
+
+def incarnon_runtime_controls() -> rx.Component:
+    return rx.cond(
+        (CalculatorState.evolution_condition_toggles.length() > 0) | (CalculatorState.evolution_stack_selectors.length() > 0),
+        rx.vstack(
+            rx.text("Incarnon Conditions", class_name="optimizer-group-title"),
+            rx.grid(
+                rx.foreach(CalculatorState.evolution_condition_toggles, incarnon_toggle_control),
+                rx.foreach(CalculatorState.evolution_stack_selectors, incarnon_stack_control),
+                columns=rx.breakpoints(initial="1", md="2"),
+                gap="4",
+                width="100%",
+            ),
+            width="100%",
+            gap="3",
+            class_name="incarnon-runtime-panel",
+        ),
+    )
+
+
 def weapon_section() -> rx.Component:
     return rx.vstack(
         section_title("Weapon", "Choose a database weapon or define a custom one."),
@@ -503,6 +541,10 @@ def weapon_section() -> rx.Component:
                     ),
                 ),
                 rx.cond(
+                    CalculatorState.melee_weapon & (~CalculatorState.no_weapon),
+                    select_control("Combo Count", MELEE_COMBO_OPTIONS, CalculatorState.melee_combo_count, CalculatorState.set_melee_combo_count),
+                ),
+                rx.cond(
                     CalculatorState.stance_combo_available,
                     stance_combo_control(),
                 ),
@@ -524,6 +566,7 @@ def weapon_section() -> rx.Component:
                         class_name="form-grid form-grid-2",
                     ),
                 ),
+                incarnon_runtime_controls(),
                 rx.cond(
                     CalculatorState.custom_weapon,
                     custom_base_stats(),
