@@ -49,6 +49,7 @@ DAMAGE_RELATED_STATS = {
 }
 CANDIDATE_SOFT_CAP = 150
 CANDIDATE_SHORTLIST_LIMIT = 24
+CANDIDATE_SHORTLIST_HARD_CAP = 36
 CANDIDATE_PER_STAT_LIMIT = 2
 CANDIDATE_RAW_STAT_LIMIT = 2
 HILL_CLIMB_SWAP_LIMIT = 60
@@ -408,7 +409,7 @@ def optimize_build(request: OptimizeRequest, progress: ProgressCallback | None =
         for i in indices:
             if names[i] not in {NONE, CUSTOM, RIVEN} and names[i] not in retained:
                 retained.append(names[i])
-        return retained
+        return retained[:CANDIDATE_SHORTLIST_HARD_CAP]
 
     mod_pool = shortlist(mod_pool, pool_groups[0][1])
     stance_pool = shortlist(stance_pool, pool_groups[1][1])
@@ -453,7 +454,9 @@ def optimize_build(request: OptimizeRequest, progress: ProgressCallback | None =
         for fill_i, index in enumerate(open_slots):
             best_name, best_dps, best_rank, best_stacks = names[index], baseline, ranks[index], stacks_list[index]
             prev = names[index], ranks[index], stacks_list[index], dict(riven_fields[index]), rolls[index], customs[index]
-            for candidate in pool_for(index):
+            pool = pool_for(index)
+            pool_n = max(len(pool), 1)
+            for candidate_i, candidate in enumerate(pool, start=1):
                 if not legal(candidate, index):
                     continue
                 max_rank, max_stacks = max_runtime(candidate, slots[index].kind)
@@ -461,6 +464,9 @@ def optimize_build(request: OptimizeRequest, progress: ProgressCallback | None =
                 dps = score()
                 if dps > best_dps:
                     best_name, best_dps, best_rank, best_stacks = candidate, dps, max_rank, max_stacks
+                if candidate_i == 1 or candidate_i == pool_n or candidate_i % 12 == 0:
+                    slot_frac = (fill_i + candidate_i / pool_n) / n_open
+                    report(f"{label} ({fill_i + 1}/{len(open_slots)})", progress_start + progress_span * slot_frac, best_dps)
             place(index, prev[0], policy=SLOT_POLICY_DISCARD, rank=prev[1], stacks=prev[2], fields=prev[3], roll=prev[4], custom=prev[5])
             if best_dps > baseline:
                 place(index, best_name, policy=SLOT_POLICY_DISCARD, rank=best_rank, stacks=best_stacks, fields={})

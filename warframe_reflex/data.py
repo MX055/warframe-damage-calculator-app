@@ -201,14 +201,7 @@ def weapon_evolution_runtime_controls(weapon_name: str | None, selected_evolutio
     metadata = custom_metadata if custom_metadata is not None else raw_weapon_metadata("", weapon_name)
     evolutions = (metadata or {}).get("evolutions") or {}
     selected_perks = []
-    tier_one = evolutions.get("1") or evolutions.get(1)
-    if isinstance(tier_one, dict):
-        perk_one = tier_one.get("1") or tier_one.get(1)
-        if isinstance(perk_one, dict):
-            selected_perks.append(perk_one)
     for tier, perk in selected_evolutions.items():
-        if int(tier) == 1:
-            continue
         tier_data = evolutions.get(str(tier)) or evolutions.get(tier)
         perk_data = (tier_data.get(str(perk)) or tier_data.get(perk)) if isinstance(tier_data, dict) else None
         if isinstance(perk_data, dict):

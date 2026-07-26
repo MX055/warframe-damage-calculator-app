@@ -568,18 +568,28 @@ def contribution_key_name(contribution_key: object) -> str:
 
 
 def contribution_for_category(contribution_lookup, name: str) -> float | None:
-    items = contribution_items(contribution_lookup)
-    direct = [
-        value for key, value in items if contribution_key_name(key) == name
-    ]
+    items = contribution_lookup if isinstance(contribution_lookup, list) else contribution_items(contribution_lookup)
+    direct = [value for key, value in items if contribution_key_name(key) == name]
     if direct:
         return sum(direct)
     prefix = f"{name} (slot "
-    slotted = [
-        value
-        for key, value in items
-        if contribution_key_name(key).startswith(prefix)
-    ]
+    slotted = [value for key, value in items if contribution_key_name(key).startswith(prefix)]
+    return sum(slotted) if slotted else None
+
+
+def contribution_lookup_map(contribution_lookup) -> dict[str, float]:
+    totals: dict[str, float] = {}
+    for key, value in contribution_items(contribution_lookup):
+        name = contribution_key_name(key)
+        totals[name] = totals.get(name, 0.0) + float(value)
+    return totals
+
+
+def contribution_value_for_name(contribution_map: Mapping[str, float], name: str) -> float | None:
+    if name in contribution_map:
+        return contribution_map[name]
+    prefix = f"{name} (slot "
+    slotted = [value for key, value in contribution_map.items() if key.startswith(prefix)]
     return sum(slotted) if slotted else None
 
 
@@ -618,8 +628,19 @@ def contribution_lookup_for_weapon(
     base_stats: dict | None,
     upgrades: list[Upgrade],
 ):
+    """Prefer O(n) removal contributions for interactive UI; Shapley is too slow for live recalc."""
+    if not upgrades:
+        return []
+
+    try:
+        removal = getattr(weapon.results, "removal_contributions")
+        items = contribution_items(removal() if callable(removal) else removal)
+        total = sum(value for _, value in items) or 1.0
+        return [(key, value / total) for key, value in items]
+    except (AttributeError, TypeError):
+        pass
+
     for attribute_name in (
-        "shapley_contributions",
         "contribution_proportions",
         "upgrade_contribution_proportions",
         "contributions_proportions",
@@ -629,14 +650,6 @@ def contribution_lookup_for_weapon(
             return contribution_items(value() if callable(value) else value)
         except (AttributeError, TypeError):
             pass
-
-    try:
-        removal = getattr(weapon.results, "removal_contributions")
-        items = contribution_items(removal() if callable(removal) else removal)
-        total = sum(value for _, value in items) or 1.0
-        return [(key, value / total) for key, value in items]
-    except (AttributeError, TypeError):
-        pass
 
     if base_stats is None:
         return []

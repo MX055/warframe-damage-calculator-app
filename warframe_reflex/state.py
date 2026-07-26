@@ -69,9 +69,10 @@ from .engine import (
     clamp_number,
     configured_enemy,
     configured_weapon,
-    contribution_for_category,
     contribution_lookup_for_weapon,
+    contribution_lookup_map,
     contribution_rows,
+    contribution_value_for_name,
     stance_combo_rows,
     custom_upgrade_from_entry,
     effective_damage_rows,
@@ -1225,54 +1226,59 @@ class CalculatorState(rx.State):
 
         while True:
             await asyncio.sleep(0.15)
-            drained = False
+            latest_progress = None
+            terminal = None
             while True:
                 try:
                     msg = q.get_nowait()
                 except sync_queue.Empty:
                     break
-                drained = True
                 if msg[0] == "progress":
-                    _, phase, fraction, evaluations, best_dps = msg
-                    async with self:
-                        if self.optimize_revision != revision:
-                            continue
+                    latest_progress = msg
+                else:
+                    terminal = msg
+            if latest_progress is not None:
+                _, phase, fraction, evaluations, best_dps = latest_progress
+                async with self:
+                    if self.optimize_revision == revision:
                         self.optimize_phase = phase
                         self.optimize_progress = float(fraction) * 100.0
                         self.optimize_progress_width = f"{self.optimize_progress:.1f}%"
                         self.optimize_evaluations = int(evaluations)
                         if best_dps is not None:
                             self.optimize_best_dps = f"{best_dps:,.2f}"
-                elif msg[0] == "done":
-                    result = msg[1]
-                    async with self:
-                        if self.optimize_revision != revision:
-                            self.optimize_running = False
-                        else:
-                            self._apply_optimize_result(result)
-                            self.optimize_status = result.message
-                            self.optimize_best_dps = f"{result.total_dps:,.2f}"
-                            self.optimize_phase = "Done"
-                            self.optimize_progress = 100.0
-                            self.optimize_progress_width = "100%"
-                            self.optimize_evaluations = result.evaluations
-                            self._refresh_upgrade_options()
-                            self._refresh_all_riven_field_limits()
-                            self._refresh_slot_field_options()
-                            self._recalculate()
-                            self.optimize_running = False
-                    await fut
-                    return
-                elif msg[0] == "error":
-                    exc = msg[1]
-                    async with self:
-                        if self.optimize_revision == revision:
-                            self.optimize_status = f"{type(exc).__name__}: {exc}"
-                            self.optimize_phase = "Failed"
+            if terminal is None:
+                continue
+            if terminal[0] == "done":
+                result = terminal[1]
+                async with self:
+                    if self.optimize_revision != revision:
                         self.optimize_running = False
-                    await fut
-                    return
-            if fut.done() and not drained:
+                    else:
+                        self._apply_optimize_result(result)
+                        self.optimize_status = result.message
+                        self.optimize_best_dps = f"{result.total_dps:,.2f}"
+                        self.optimize_phase = "Done"
+                        self.optimize_progress = 100.0
+                        self.optimize_progress_width = "100%"
+                        self.optimize_evaluations = result.evaluations
+                        self._refresh_upgrade_options()
+                        self._refresh_all_riven_field_limits()
+                        self._refresh_slot_field_options()
+                        self._recalculate()
+                        self.optimize_running = False
+                await fut
+                return
+            if terminal[0] == "error":
+                exc = terminal[1]
+                async with self:
+                    if self.optimize_revision == revision:
+                        self.optimize_status = f"{type(exc).__name__}: {exc}"
+                        self.optimize_phase = "Failed"
+                    self.optimize_running = False
+                await fut
+                return
+            if fut.done() and terminal is None and latest_progress is None:
                 exc = fut.exception()
                 async with self:
                     if exc and self.optimize_revision == revision:
@@ -2494,6 +2500,7 @@ class CalculatorState(rx.State):
                 None,
                 upgrades,
             )
+            contribution_map = contribution_lookup_map(contribution_lookup)
 
             contributions = []
             for index, config in enumerate(SLOT_CONFIGS):
@@ -2505,7 +2512,7 @@ class CalculatorState(rx.State):
                 )
                 contributions.append(
                     format_contribution(
-                        contribution_for_category(contribution_lookup, contribution_name)
+                        contribution_value_for_name(contribution_map, contribution_name)
                     )
                 )
             self.slot_contributions = contributions

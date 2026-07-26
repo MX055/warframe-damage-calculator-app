@@ -61,30 +61,14 @@ def select_input(
     *,
     disabled=False,
 ) -> rx.Component:
-    """Render a full-width, 32px-high Radix select trigger."""
-    return rx.select.root(
-        rx.select.trigger(
-            width="100%",
-            min_width="0",
-            max_width="100%",
-            height="32px",
-            min_height="32px",
-            class_name="full-width-select-trigger",
-            custom_attrs={"data-full-width-select": "true"},
-        ),
-        rx.select.content(
-            rx.select.group(
-                rx.foreach(
-                    options,
-                    lambda option: rx.select.item(option, value=option),
-                ),
-            ),
-            position="popper",
-        ),
+    """Native select — Radix+foreach is too slow for large option lists (enemies/mods)."""
+    return rx.el.select(
+        rx.foreach(options, lambda option: rx.el.option(option, value=option)),
         value=value,
         on_change=on_change,
         disabled=disabled,
-        width="100%",
+        class_name="native-select full-width-select-trigger",
+        custom_attrs={"data-full-width-select": "true"},
     )
 
 
@@ -126,7 +110,7 @@ def number_control(
             max=maximum,
             step=step,
             width="100%",
-            debounce_timeout=250,
+            debounce_timeout=400,
         ),
     )
 
@@ -235,7 +219,7 @@ def damage_field_row(field: rx.Var[EditorField], group: str) -> rx.Component:
             on_change=lambda value: CalculatorState.set_damage_value(
                 group, field.name, value
             ),
-            debounce_timeout=250,
+            debounce_timeout=400,
             width="100%",
         ),
         rx.button(
@@ -696,7 +680,7 @@ def slot_editor_field(field: rx.Var[EditorField], index: int) -> rx.Component:
             on_change=lambda value: CalculatorState.set_slot_field_value(
                 index, field.name, value
             ),
-            debounce_timeout=250,
+            debounce_timeout=400,
             width="100%",
         ),
         rx.button(
@@ -814,7 +798,7 @@ def riven_editor_row(field: rx.Var[EditorField], position, index: int) -> rx.Com
         rx.text(CalculatorState.slot_riven_row_labels[index][position], class_name="compact-label"),
         rx.grid(
             select_input(CalculatorState.slot_riven_field_options[index][position], field.label, lambda value: CalculatorState.set_riven_stat(index, position, value)),
-            rx.input(type="number", value=field.value, min=field.min_value, max=field.max_value, step="0.001", on_change=lambda value: CalculatorState.set_slot_field_value(index, field.name, value), debounce_timeout=250, disabled=field.name == "", width="100%"),
+            rx.input(type="number", value=field.value, min=field.min_value, max=field.max_value, step="0.001", on_change=lambda value: CalculatorState.set_slot_field_value(index, field.name, value), debounce_timeout=400, disabled=field.name == "", width="100%"),
             columns="minmax(0, 1fr) minmax(96px, 0.42fr)",
             column_gap="8px",
             width="100%",
@@ -874,26 +858,29 @@ def upgrade_slot(index: int) -> rx.Component:
                 html_for=toggle_id,
                 class_name="slot-editor-summary",
             ),
-            rx.vstack(
-                select_input(slot_options(index), CalculatorState.slot_selected_upgrades[index], lambda value: CalculatorState.set_slot_upgrade(index, value)),
-                *([rx.cond(CalculatorState.exclusive_stance_weapon, rx.text("Exalted weapons always use their own stance.", class_name="optimizer-help"))] if index == STANCE_SLOT_INDEX else []),
-                rx.cond(
-                    CalculatorState.slot_selected_upgrades[index] == NONE,
-                    rx.text("Select an upgrade to edit its settings.", class_name="empty-text"),
+            rx.cond(
+                CalculatorState.slot_editor_open[index],
+                rx.vstack(
+                    select_input(slot_options(index), CalculatorState.slot_selected_upgrades[index], lambda value: CalculatorState.set_slot_upgrade(index, value)),
+                    *([rx.cond(CalculatorState.exclusive_stance_weapon, rx.text("Exalted weapons always use their own stance.", class_name="optimizer-help"))] if index == STANCE_SLOT_INDEX else []),
                     rx.cond(
-                        CalculatorState.slot_selected_upgrades[index] == CUSTOM,
-                        custom_slot_body(index),
+                        CalculatorState.slot_selected_upgrades[index] == NONE,
+                        rx.text("Select an upgrade to edit its settings.", class_name="empty-text"),
                         rx.cond(
-                            CalculatorState.slot_selected_upgrades[index] == RIVEN,
-                            riven_slot_body(index),
-                            database_slot_body(index),
+                            CalculatorState.slot_selected_upgrades[index] == CUSTOM,
+                            custom_slot_body(index),
+                            rx.cond(
+                                CalculatorState.slot_selected_upgrades[index] == RIVEN,
+                                riven_slot_body(index),
+                                database_slot_body(index),
+                            ),
                         ),
                     ),
+                    width="100%",
+                    gap="3",
+                    align="start",
+                    class_name="slot-editor-controls",
                 ),
-                width="100%",
-                gap="3",
-                align="start",
-                class_name="slot-editor-controls",
             ),
             width="100%",
             class_name="slot-editor-shell",
@@ -914,7 +901,7 @@ def external_editor_field(field: rx.Var[EditorField]) -> rx.Component:
             on_change=lambda value: CalculatorState.set_external_field_value(
                 field.name, value
             ),
-            debounce_timeout=250,
+            debounce_timeout=400,
             width="100%",
         ),
         rx.button(

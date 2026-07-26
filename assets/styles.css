@@ -546,14 +546,10 @@ textarea.database-entry-input::placeholder {
 }
 
 .slot-editor-controls {
-  display: none !important;
+  display: flex;
   margin-top: 0.85rem;
   padding-top: 0.85rem;
   border-top: 1px solid var(--border);
-}
-
-.slot-editor-toggle-input:checked ~ .slot-editor-controls {
-  display: flex !important;
 }
 
 
@@ -622,6 +618,36 @@ textarea.database-entry-input::placeholder {
   padding-top: 0 !important;
   padding-bottom: 0 !important;
   align-items: center !important;
+}
+
+select.native-select,
+select.full-width-select-trigger,
+select[data-full-width-select="true"] {
+  display: block !important;
+  width: 100% !important;
+  min-width: 0 !important;
+  max-width: 100% !important;
+  height: 32px !important;
+  min-height: 32px !important;
+  margin: 0;
+  padding: 0 1.75rem 0 0.65rem !important;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background-color: var(--panel-bg);
+  color: inherit;
+  font: inherit;
+  line-height: 30px;
+  appearance: none;
+  background-image: linear-gradient(45deg, transparent 50%, currentColor 50%), linear-gradient(135deg, currentColor 50%, transparent 50%);
+  background-position: calc(100% - 14px) 13px, calc(100% - 9px) 13px;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+  cursor: pointer;
+}
+
+select.native-select:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 
 .optimizer-menu {
