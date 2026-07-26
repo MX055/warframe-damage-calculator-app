@@ -37,7 +37,7 @@ WEAPON_ACTIVATED_CONDITIONS = {
     "on 2 hits within 0 02s", "on 2 hits within 0 2s", "on 4 hits within 0 05s", "on 5 pellet headshot", "on alt fire", "on cold status effect",
     "on combined status at 10 stacks", "on critical hit", "on damaging enemies with heat", "on direct hit", "on electricity status effect", "on full charge",
     "on headshot", "on headshot kill", "on headshot kill on eximus", "on heat status effect", "on hit", "on kill", "on orb strike", "on proc", "on pull",
-    "on reload", "on status effect", "on toxin status effect", "on weak point hits with primary fire", "stacks", "status type", "target 15m", "weak point hit",
+    "on status effect", "on toxin status effect", "on weak point hits with primary fire", "stacks", "status type", "target 15m", "weak point hit",
     "weak point kill",
 }
 
@@ -212,9 +212,9 @@ def selected_attack_trigger(selected_weapon_name: str | None, selected_mode: str
     return normalized_database_key(trigger) if trigger else None
 
 
-def selected_attack_is_aoe(selected_weapon_name: str | None, selected_mode: str | None, *, custom_metadata: dict | None = None) -> bool:
+def weapon_has_aoe_attack(selected_weapon_name: str | None, *, custom_metadata: dict | None = None) -> bool:
     metadata = custom_metadata if custom_metadata is not None else raw_weapon_metadata("", selected_weapon_name)
-    return bool(_selected_attack(metadata, selected_mode).get("aoe", False))
+    return any(bool(attack.get("aoe", False)) for attack in (metadata.get("attacks") or {}).values() if isinstance(attack, dict))
 
 
 def selected_attack_category(selected_weapon_name: str | None, selected_mode: str | None, *, custom_metadata: dict | None = None) -> str:
@@ -279,10 +279,13 @@ def upgrade_matches_weapon_type(metadata: dict, weapon_category: str, *, selecte
     }
     if allowed and not (allowed & weapon_compatibility_terms(weapon_category, selected_weapon_name, custom_metadata=custom_metadata)):
         return False
-    has_aoe_rule = "aoe" in compatibility
     has_trigger_rule = bool(compatibility.get("triggers"))
+    # The database serializes aoe=false for every upgrade. It is a meaningful
+    # restriction only alongside another weapon-mode rule (the Cannonade mods);
+    # aoe=true remains meaningful on its own for future database entries.
+    has_aoe_rule = compatibility.get("aoe") is True or ("aoe" in compatibility and has_trigger_rule)
     if has_aoe_rule:
-        is_aoe = selected_attack_is_aoe(selected_weapon_name, selected_mode, custom_metadata=custom_metadata)
+        is_aoe = weapon_has_aoe_attack(selected_weapon_name, custom_metadata=custom_metadata)
         if bool(compatibility["aoe"]) != is_aoe:
             return False
     if has_trigger_rule:

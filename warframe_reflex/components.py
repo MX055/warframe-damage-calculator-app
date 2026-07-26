@@ -929,6 +929,56 @@ def external_buffs() -> rx.Component:
     )
 
 
+def clear_upgrade_row(index: int) -> rx.Component:
+    config = SLOT_CONFIGS[index]
+    return rx.cond(
+        CalculatorState.slot_selected_upgrades[index] != NONE,
+        rx.grid(
+            rx.hstack(
+                rx.checkbox(checked=CalculatorState.clear_keep_slots[index], on_change=lambda value: CalculatorState.set_clear_keep_slot(index, value), disabled=CalculatorState.optimize_running),
+                rx.text("Keep", class_name="clear-build-keep-label"),
+                align="center",
+                gap="2",
+            ),
+            rx.text(config["label"], class_name="clear-build-slot"),
+            rx.text(CalculatorState.slot_selected_upgrades[index], class_name="clear-build-upgrade"),
+            rx.button("×", on_click=CalculatorState.remove_build_upgrade(index), disabled=CalculatorState.optimize_running, variant="ghost", class_name="clear-build-remove", title="Remove this upgrade"),
+            columns="74px 70px minmax(120px, 1fr) 30px",
+            align="center",
+            width="100%",
+            class_name="clear-build-row",
+        ),
+        rx.fragment(),
+    )
+
+
+def clear_build_menu() -> rx.Component:
+    return rx.accordion.root(
+        rx.accordion.item(
+            header=rx.hstack(rx.text("Clear", class_name="clear-build-title"), rx.badge("Build + buffs", variant="soft", color_scheme="gray"), width="100%", align="center", gap="2"),
+            content=rx.vstack(
+                rx.text("Mark upgrades to keep, or remove one directly.", class_name="optimizer-help"),
+                rx.cond(
+                    CalculatorState.has_equipped_upgrades,
+                    rx.vstack(*[clear_upgrade_row(index) for index in OPTIMIZER_SLOT_ORDER], width="100%", gap="0", class_name="clear-build-list"),
+                    rx.text("No upgrades equipped.", class_name="empty-text"),
+                ),
+                rx.button("Clear build & buffs", on_click=CalculatorState.clear_build_and_buffs, disabled=(~CalculatorState.has_build_or_buffs) | CalculatorState.optimize_running, color_scheme="red", variant="soft", width="100%"),
+                width="100%",
+                align="start",
+                gap="3",
+                class_name="clear-build-content",
+            ),
+            value="clear-build",
+        ),
+        type="single",
+        collapsible=True,
+        color_scheme="gray",
+        variant="surface",
+        class_name="clear-build-menu",
+    )
+
+
 def slot_spacer() -> rx.Component:
     return rx.box(class_name="slot-spacer", aria_hidden=True)
 
@@ -985,9 +1035,14 @@ def melee_upgrade_grid() -> rx.Component:
 
 def upgrades_section() -> rx.Component:
     return rx.vstack(
-        section_title(
-            "Upgrades",
-            "Stance (melee), eight mod slots, Exilus, Arcane, and external buffs.",
+        rx.hstack(
+            section_title("Upgrades", "Stance (melee), eight mod slots, Exilus, Arcane, and external buffs."),
+            clear_build_menu(),
+            width="100%",
+            align="start",
+            justify="between",
+            gap="4",
+            class_name="upgrades-heading-row",
         ),
         rx.box(
             rx.cond(CalculatorState.melee_weapon, melee_upgrade_grid(), ranged_upgrade_grid()),
@@ -1206,7 +1261,7 @@ def optimizer_section() -> rx.Component:
                         rx.vstack(
                             optimizer_exclusion_editor(
                                 "Excluded upgrades",
-                                "Faction damage and external-activation upgrades start excluded. Remove any chip to allow it.",
+                                "Faction damage, external-activation, and reload-triggered upgrades start excluded. Remove any chip to allow one.",
                                 CalculatorState.optimize_upgrade_exclusion_options,
                                 CalculatorState.optimize_pending_excluded_upgrade,
                                 CalculatorState.set_optimize_pending_excluded_upgrade,
@@ -1402,11 +1457,13 @@ def results_section() -> rx.Component:
         section_title("Results", "Updated automatically whenever the build changes."),
         rx.cond(
             CalculatorState.has_error,
-            rx.box(
+            rx.vstack(
                 rx.text("The calculator could not evaluate the current configuration."),
-                rx.code(CalculatorState.result_error),
+                rx.foreach(CalculatorState.result_errors, lambda error: rx.code(error, class_name="result-error-message")),
                 class_name="error-box",
                 width="100%",
+                align="start",
+                gap="2",
             ),
         ),
         rx.cond(

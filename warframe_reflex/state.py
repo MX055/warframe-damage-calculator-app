@@ -316,6 +316,8 @@ class CalculatorState(rx.State):
     enemy_bodypart_rows: list[DisplayRow] = rx.field(default_factory=list)
     enemy_modifier_rows: list[DisplayRow] = rx.field(default_factory=list)
     enemy_result_metrics: list[MetricRow] = rx.field(default_factory=list)
+    enemy_has_weakpoint: bool = False
+    enemy_has_resistant: bool = False
     enemy_error: str = ""
     attack_mode_options: list[str] = rx.field(default_factory=list)
     selected_attack_mode: str = ""
@@ -422,6 +424,7 @@ class CalculatorState(rx.State):
         default_factory=lambda: ["—" for _ in SLOT_CONFIGS]
     )
     slot_editor_open: list[bool] = rx.field(default_factory=lambda: [False for _ in SLOT_CONFIGS])
+    clear_keep_slots: list[bool] = rx.field(default_factory=lambda: [False for _ in SLOT_CONFIGS])
     optimize_find_riven: bool = False
     optimize_find_evolutions: bool = False
     optimize_maximize_target: str = DEFAULT_OPTIMIZE_MAXIMIZE
@@ -433,6 +436,7 @@ class CalculatorState(rx.State):
     optimize_progress_width: str = "0%"
     optimize_phase: str = ""
     optimize_evaluations: int = 0
+    optimize_revision: int = 0
     optimize_excluded_upgrades: list[str] = rx.field(default_factory=list)
     optimize_default_exclusion_overrides: list[str] = rx.field(default_factory=list)
     optimize_upgrade_exclusion_options: list[str] = rx.field(default_factory=list)
@@ -457,6 +461,7 @@ class CalculatorState(rx.State):
     result_summary: str = ""
     result_contribution_summary: str = ""
     result_error: str = ""
+    result_errors: list[str] = rx.field(default_factory=list)
     result_ready: bool = False
 
     @rx.var
@@ -478,6 +483,14 @@ class CalculatorState(rx.State):
     @rx.var
     def no_weapon(self) -> bool:
         return self.selected_weapon == NONE
+
+    @rx.var
+    def has_equipped_upgrades(self) -> bool:
+        return any(selected != NONE for selected in self.slot_selected_upgrades)
+
+    @rx.var
+    def has_build_or_buffs(self) -> bool:
+        return any(selected != NONE for selected in self.slot_selected_upgrades) or bool(self.external_fields)
 
     @rx.var
     def optimizer_enabled(self) -> bool:
@@ -506,7 +519,7 @@ class CalculatorState(rx.State):
 
     @rx.var
     def has_error(self) -> bool:
-        return bool(self.result_error)
+        return bool(self.result_errors)
 
     @rx.var
     def supports_progenitor(self) -> bool:
@@ -516,6 +529,48 @@ class CalculatorState(rx.State):
         if not self.ability_strength_available:
             return None
         return max(float(self.ability_strength), 0.0) / 100.0
+
+    def _clear_optimizer_result(self):
+        self.optimize_status = ""
+        self.optimize_best_dps = ""
+        self.optimize_progress = 0.0
+        self.optimize_progress_width = "0%"
+        self.optimize_phase = ""
+        self.optimize_evaluations = 0
+
+    def _invalidate_optimizer_result(self):
+        self.optimize_revision += 1
+        self._clear_optimizer_result()
+
+    def _reset_optimizer_settings(self):
+        self._invalidate_optimizer_result()
+        self.optimize_find_riven = False
+        self.optimize_find_evolutions = False
+        self.optimize_maximize_target = DEFAULT_OPTIMIZE_MAXIMIZE
+        self.optimize_excluded_upgrades = []
+        self.optimize_default_exclusion_overrides = []
+        self.optimize_upgrade_exclusion_options = []
+        self.optimize_pending_excluded_upgrade = ""
+        self.optimize_excluded_riven_stats = []
+        self.optimize_default_riven_exclusion_overrides = []
+        self.optimize_riven_stat_exclusion_options = []
+        self.optimize_pending_excluded_riven_stat = ""
+
+    def _clear_build_state(self, *, keep_marked: bool = False):
+        keep_slots = list(self.clear_keep_slots)
+        for index in range(len(SLOT_CONFIGS)):
+            if keep_marked and keep_slots[index] and self.slot_selected_upgrades[index] != NONE:
+                continue
+            self._clear_slot(index)
+            keep_slots[index] = False
+        self.clear_keep_slots = keep_slots
+        self.slot_editor_open = [False for _ in SLOT_CONFIGS]
+        self.external_fields = []
+        self._refresh_external_field_options()
+
+    def _reset_for_weapon_change(self):
+        self._clear_build_state()
+        self._reset_optimizer_settings()
 
     @rx.event
     def initialize(self):
@@ -533,8 +588,9 @@ class CalculatorState(rx.State):
 
     @rx.event
     def set_weapon_type(self, value: str):
-        if value not in WEAPON_CATEGORY_TYPES:
+        if value not in WEAPON_CATEGORY_TYPES or value == self.selected_weapon_category:
             return
+        self._reset_for_weapon_change()
         self.selected_weapon_category = value
         self.selected_weapon_type = WEAPON_CATEGORY_TYPES[value]
         self.selected_weapon = NONE
@@ -562,7 +618,11 @@ class CalculatorState(rx.State):
 
     @rx.event
     def set_weapon(self, value: str):
-        self.selected_weapon = value if value in self.weapon_options else NONE
+        selected_weapon = value if value in self.weapon_options else NONE
+        if selected_weapon == self.selected_weapon:
+            return
+        self._reset_for_weapon_change()
+        self.selected_weapon = selected_weapon
         self._refresh_weapon_features()
         self._refresh_upgrade_options()
         self._refresh_all_riven_field_limits()
@@ -572,16 +632,19 @@ class CalculatorState(rx.State):
     @rx.event
     def set_enemy(self, value: str):
         self.selected_enemy = value if value in self.enemy_options else NONE
+        self._invalidate_optimizer_result()
         self._recalculate()
 
     @rx.event
     def set_custom_enemy_entry(self, value: str):
         self.custom_enemy_entry = value
+        self._invalidate_optimizer_result()
         self._recalculate()
 
     @rx.event
     def set_enemy_level(self, value: str):
         self.enemy_level = max(1, min(parse_int(value, self.enemy_level), 9999))
+        self._invalidate_optimizer_result()
         self._recalculate()
 
     @rx.event
@@ -589,11 +652,13 @@ class CalculatorState(rx.State):
         if field_name not in {"enemy_steel_path", "enemy_empowered"}:
             return
         setattr(self, field_name, bool(value))
+        self._invalidate_optimizer_result()
         self._recalculate()
 
     @rx.event
     def set_custom_weapon_entry(self, value: str):
         self.custom_weapon_entry = value
+        self._invalidate_optimizer_result()
         self._refresh_weapon_features()
         self._refresh_upgrade_options()
         self._refresh_all_riven_field_limits()
@@ -609,6 +674,7 @@ class CalculatorState(rx.State):
         self.custom_upgrade_entries = entries
         if index == STANCE_SLOT_INDEX:
             self._refresh_stance_combo_options()
+        self._invalidate_optimizer_result()
         self._recalculate()
 
     @rx.event
@@ -616,6 +682,7 @@ class CalculatorState(rx.State):
         if value not in self.attack_mode_options:
             return
         self.selected_attack_mode = value
+        self._invalidate_optimizer_result()
         self._refresh_upgrade_options()
         self._refresh_all_riven_field_limits()
         self._refresh_slot_field_options()
@@ -628,11 +695,13 @@ class CalculatorState(rx.State):
         selections = list(self.evolution_selections)
         selections[index] = value
         self.evolution_selections = selections
+        self._invalidate_optimizer_result()
         self._recalculate()
 
     @rx.event
     def set_progenitor_element(self, value: str):
         self.progenitor_element = value
+        self._invalidate_optimizer_result()
         self._recalculate()
 
     @rx.event
@@ -645,6 +714,7 @@ class CalculatorState(rx.State):
         parsed = parse_int(value, int(current)) if integer else parse_float(value, float(current))
         parsed = clamp_number(float(parsed), minimum, maximum)
         setattr(self, field_name, int(parsed) if integer else float(parsed))
+        self._invalidate_optimizer_result()
         self._recalculate()
 
     @rx.event
@@ -657,6 +727,7 @@ class CalculatorState(rx.State):
         }:
             return
         setattr(self, field_name, bool(value))
+        self._invalidate_optimizer_result()
         self._refresh_upgrade_options()
         self._recalculate()
 
@@ -678,6 +749,7 @@ class CalculatorState(rx.State):
         )
         self._set_damage_fields(group, fields)
         self._refresh_damage_options()
+        self._invalidate_optimizer_result()
         self._recalculate()
 
     @rx.event
@@ -689,6 +761,7 @@ class CalculatorState(rx.State):
         ]
         self._set_damage_fields(group, fields)
         self._refresh_damage_options()
+        self._invalidate_optimizer_result()
         self._recalculate()
 
     @rx.event
@@ -699,6 +772,7 @@ class CalculatorState(rx.State):
                 field.value = max(0.0, parse_float(value, field.value))
                 break
         self._set_damage_fields(group, fields)
+        self._invalidate_optimizer_result()
         self._recalculate()
 
     @rx.event
@@ -710,11 +784,43 @@ class CalculatorState(rx.State):
         self.slot_editor_open = open_editors
 
     @rx.event
+    def set_clear_keep_slot(self, index: int, value: bool):
+        if not 0 <= index < len(SLOT_CONFIGS) or self.slot_selected_upgrades[index] == NONE:
+            return
+        keep_slots = list(self.clear_keep_slots)
+        keep_slots[index] = bool(value)
+        self.clear_keep_slots = keep_slots
+
+    @rx.event
+    def clear_build_and_buffs(self):
+        self._clear_build_state(keep_marked=True)
+        self._invalidate_optimizer_result()
+        self._refresh_upgrade_options()
+        self._refresh_all_riven_field_limits()
+        self._refresh_all_field_options()
+        self._recalculate()
+
+    @rx.event
+    def remove_build_upgrade(self, index: int):
+        if not 0 <= index < len(SLOT_CONFIGS) or self.slot_selected_upgrades[index] == NONE:
+            return
+        self._clear_slot(index)
+        keep_slots = list(self.clear_keep_slots)
+        keep_slots[index] = False
+        self.clear_keep_slots = keep_slots
+        self._invalidate_optimizer_result()
+        self._refresh_upgrade_options()
+        self._refresh_all_riven_field_limits()
+        self._refresh_all_field_options()
+        self._recalculate()
+
+    @rx.event
     def set_slot_upgrade(self, index: int, value: str):
         if not 0 <= index < len(SLOT_CONFIGS):
             return
         if value not in self.slot_upgrade_options[index]:
             return
+        self._invalidate_optimizer_result()
         selected = list(self.slot_selected_upgrades)
         previous = selected[index]
         selected[index] = value
@@ -782,6 +888,7 @@ class CalculatorState(rx.State):
         if value not in self.stance_combo_options:
             return
         self.selected_stance_combo = value
+        self._invalidate_optimizer_result()
         self._recalculate()
 
     @rx.event
@@ -791,6 +898,7 @@ class CalculatorState(rx.State):
         policies = list(self.slot_policies)
         policies[index] = value
         self.slot_policies = policies
+        self._invalidate_optimizer_result()
         selected = self.slot_selected_upgrades[index]
         if value in {SLOT_POLICY_KEEP, SLOT_POLICY_KEEP_IN_SLOT} and selected in self.optimize_excluded_upgrades:
             if optimizer_excludes_upgrade_by_default(selected) and selected not in self.optimize_default_exclusion_overrides:
@@ -815,6 +923,7 @@ class CalculatorState(rx.State):
             if selected == name:
                 policies[index] = SLOT_POLICY_DISCARD
         self.slot_policies = policies
+        self._invalidate_optimizer_result()
         self._refresh_optimizer_exclusion_options()
 
     @rx.event
@@ -822,6 +931,7 @@ class CalculatorState(rx.State):
         if optimizer_excludes_upgrade_by_default(name) and name not in self.optimize_default_exclusion_overrides:
             self.optimize_default_exclusion_overrides = [*self.optimize_default_exclusion_overrides, name]
         self.optimize_excluded_upgrades = [item for item in self.optimize_excluded_upgrades if item != name]
+        self._invalidate_optimizer_result()
         self._refresh_optimizer_exclusion_options()
 
     @rx.event
@@ -829,6 +939,7 @@ class CalculatorState(rx.State):
         defaults = [name for name in self.optimize_excluded_upgrades if optimizer_excludes_upgrade_by_default(name)]
         self.optimize_default_exclusion_overrides = list(dict.fromkeys([*self.optimize_default_exclusion_overrides, *defaults]))
         self.optimize_excluded_upgrades = []
+        self._invalidate_optimizer_result()
         self._refresh_optimizer_exclusion_options()
 
     @rx.event
@@ -843,6 +954,7 @@ class CalculatorState(rx.State):
             return
         self.optimize_default_riven_exclusion_overrides = [item for item in self.optimize_default_riven_exclusion_overrides if item != label]
         self.optimize_excluded_riven_stats = [*self.optimize_excluded_riven_stats, label]
+        self._invalidate_optimizer_result()
         self._refresh_optimizer_exclusion_options()
 
     @rx.event
@@ -851,6 +963,7 @@ class CalculatorState(rx.State):
         if field_name and is_faction_damage_stat(field_name) and label not in self.optimize_default_riven_exclusion_overrides:
             self.optimize_default_riven_exclusion_overrides = [*self.optimize_default_riven_exclusion_overrides, label]
         self.optimize_excluded_riven_stats = [item for item in self.optimize_excluded_riven_stats if item != label]
+        self._invalidate_optimizer_result()
         self._refresh_optimizer_exclusion_options()
 
     @rx.event
@@ -858,6 +971,7 @@ class CalculatorState(rx.State):
         defaults = [label for label in self.optimize_excluded_riven_stats if (field_name := self._riven_field_from_label(label)) and is_faction_damage_stat(field_name)]
         self.optimize_default_riven_exclusion_overrides = list(dict.fromkeys([*self.optimize_default_riven_exclusion_overrides, *defaults]))
         self.optimize_excluded_riven_stats = []
+        self._invalidate_optimizer_result()
         self._refresh_optimizer_exclusion_options()
 
     @rx.event
@@ -867,15 +981,18 @@ class CalculatorState(rx.State):
             for selected, policy in zip(self.slot_selected_upgrades, self.slot_policies)
         )
         self.optimize_find_riven = bool(value) and not locked
+        self._invalidate_optimizer_result()
 
     @rx.event
     def set_optimize_find_evolutions(self, value: bool):
         self.optimize_find_evolutions = bool(value) and bool(self.evolution_options)
+        self._invalidate_optimizer_result()
 
     @rx.event
     def set_optimize_maximize_target(self, value: str):
-        if value in OPTIMIZE_MAXIMIZE_TARGETS:
+        if value in self.optimize_maximize_options:
             self.optimize_maximize_target = value
+            self._invalidate_optimizer_result()
 
     @rx.event(background=True)
     async def optimize_build(self):
@@ -892,6 +1009,7 @@ class CalculatorState(rx.State):
             self.optimize_progress_width = "0%"
             self.optimize_evaluations = 0
             self.optimize_best_dps = ""
+            revision = self.optimize_revision
             evolutions = {
                 parse_int(self.evolution_labels[index].rsplit(" ", 1)[-1]): parse_int(selection.split()[1])
                 for index, selection in enumerate(self.evolution_selections)
@@ -978,6 +1096,8 @@ class CalculatorState(rx.State):
                 if msg[0] == "progress":
                     _, phase, fraction, evaluations, best_dps = msg
                     async with self:
+                        if self.optimize_revision != revision:
+                            continue
                         self.optimize_phase = phase
                         self.optimize_progress = float(fraction) * 100.0
                         self.optimize_progress_width = f"{self.optimize_progress:.1f}%"
@@ -987,32 +1107,36 @@ class CalculatorState(rx.State):
                 elif msg[0] == "done":
                     result = msg[1]
                     async with self:
-                        self._apply_optimize_result(result)
-                        self.optimize_status = result.message
-                        self.optimize_best_dps = f"{result.total_dps:,.2f}"
-                        self.optimize_phase = "Done"
-                        self.optimize_progress = 100.0
-                        self.optimize_progress_width = "100%"
-                        self.optimize_evaluations = result.evaluations
-                        self._refresh_upgrade_options()
-                        self._refresh_all_riven_field_limits()
-                        self._refresh_slot_field_options()
-                        self._recalculate()
-                        self.optimize_running = False
+                        if self.optimize_revision != revision:
+                            self.optimize_running = False
+                        else:
+                            self._apply_optimize_result(result)
+                            self.optimize_status = result.message
+                            self.optimize_best_dps = f"{result.total_dps:,.2f}"
+                            self.optimize_phase = "Done"
+                            self.optimize_progress = 100.0
+                            self.optimize_progress_width = "100%"
+                            self.optimize_evaluations = result.evaluations
+                            self._refresh_upgrade_options()
+                            self._refresh_all_riven_field_limits()
+                            self._refresh_slot_field_options()
+                            self._recalculate()
+                            self.optimize_running = False
                     await fut
                     return
                 elif msg[0] == "error":
                     exc = msg[1]
                     async with self:
-                        self.optimize_status = f"{type(exc).__name__}: {exc}"
-                        self.optimize_phase = "Failed"
+                        if self.optimize_revision == revision:
+                            self.optimize_status = f"{type(exc).__name__}: {exc}"
+                            self.optimize_phase = "Failed"
                         self.optimize_running = False
                     await fut
                     return
             if fut.done() and not drained:
                 exc = fut.exception()
                 async with self:
-                    if exc:
+                    if exc and self.optimize_revision == revision:
                         self.optimize_status = f"{type(exc).__name__}: {exc}"
                         self.optimize_phase = "Failed"
                     self.optimize_running = False
@@ -1025,6 +1149,7 @@ class CalculatorState(rx.State):
         enabled = list(self.slot_conditions_enabled)
         enabled[index] = bool(value)
         self.slot_conditions_enabled = enabled
+        self._invalidate_optimizer_result()
         self._recalculate()
 
     @rx.event
@@ -1034,6 +1159,7 @@ class CalculatorState(rx.State):
         ranks = list(self.slot_ranks)
         ranks[index] = max(0, min(parse_int(value, ranks[index]), self.slot_max_ranks[index]))
         self.slot_ranks = ranks
+        self._invalidate_optimizer_result()
         self._recalculate()
 
     @rx.event
@@ -1046,6 +1172,7 @@ class CalculatorState(rx.State):
             min(parse_int(value, stacks[index]), self.slot_max_stacks[index]),
         )
         self.slot_stacks = stacks
+        self._invalidate_optimizer_result()
         self._recalculate()
 
     @rx.event
@@ -1070,6 +1197,7 @@ class CalculatorState(rx.State):
         all_fields = copy.deepcopy(self.slot_fields)
         all_fields[index] = []
         self.slot_fields = all_fields
+        self._invalidate_optimizer_result()
         self._refresh_slot_field_options()
         self._recalculate()
 
@@ -1112,6 +1240,7 @@ class CalculatorState(rx.State):
                 )
             )
             self.slot_fields = all_fields
+            self._invalidate_optimizer_result()
             self._refresh_slot_field_options()
             self._recalculate()
             return
@@ -1131,6 +1260,7 @@ class CalculatorState(rx.State):
             )
         )
         self.slot_fields = all_fields
+        self._invalidate_optimizer_result()
         self._refresh_slot_field_options()
         self._recalculate()
 
@@ -1141,6 +1271,7 @@ class CalculatorState(rx.State):
         all_fields = copy.deepcopy(self.slot_fields)
         all_fields[index] = [field for field in all_fields[index] if field.name != field_name]
         self.slot_fields = all_fields
+        self._invalidate_optimizer_result()
         self._refresh_riven_field_limits(index)
         self._refresh_slot_field_options()
         self._recalculate()
@@ -1157,6 +1288,7 @@ class CalculatorState(rx.State):
                 field.value = int(parsed) if field.integer else float(parsed)
                 break
         self.slot_fields = all_fields
+        self._invalidate_optimizer_result()
         self._recalculate()
 
     @rx.event
@@ -1184,6 +1316,7 @@ class CalculatorState(rx.State):
             )
         )
         self.external_fields = fields
+        self._invalidate_optimizer_result()
         self._refresh_external_field_options()
         self._recalculate()
 
@@ -1194,6 +1327,7 @@ class CalculatorState(rx.State):
             for field in copy.deepcopy(self.external_fields)
             if field.name != field_name
         ]
+        self._invalidate_optimizer_result()
         self._refresh_external_field_options()
         self._recalculate()
 
@@ -1207,6 +1341,7 @@ class CalculatorState(rx.State):
                 field.value = int(parsed) if field.integer else float(parsed)
                 break
         self.external_fields = fields
+        self._invalidate_optimizer_result()
         self._recalculate()
 
     def _refresh_enemy_options(self):
@@ -1312,6 +1447,9 @@ class CalculatorState(rx.State):
         selected = list(self.slot_selected_upgrades)
         selected[index] = NONE
         self.slot_selected_upgrades = selected
+        keep_slots = list(self.clear_keep_slots)
+        keep_slots[index] = False
+        self.clear_keep_slots = keep_slots
         max_ranks, ranks = list(self.slot_max_ranks), list(self.slot_ranks)
         max_stacks, stacks = list(self.slot_max_stacks), list(self.slot_stacks)
         max_ranks[index] = 5 if SLOT_CONFIGS[index]["kind"] == "arcane" else 10
@@ -1849,16 +1987,33 @@ class CalculatorState(rx.State):
             empowered=self.enemy_empowered,
         )
 
+    def _refresh_optimize_maximize_options(self):
+        options = [
+            label
+            for label, target in OPTIMIZE_MAXIMIZE_TARGETS.items()
+            if ("weakpoint" not in target or self.enemy_has_weakpoint) and ("resistant" not in target or self.enemy_has_resistant)
+        ]
+        self.optimize_maximize_options = options
+        if self.optimize_maximize_target not in options:
+            self.optimize_maximize_target = DEFAULT_OPTIMIZE_MAXIMIZE
+
     def _refresh_enemy_preview(self, enemy) -> None:
         if self.no_enemy:
             self.enemy_identity_rows = []
             self.enemy_bodypart_rows = []
             self.enemy_modifier_rows = []
             self.enemy_result_metrics = []
+            self.enemy_has_weakpoint = False
+            self.enemy_has_resistant = False
+            self._refresh_optimize_maximize_options()
             self.enemy_error = ""
             return
         data = enemy.data
         effective = enemy.results.effective
+        part_types = {str(part.type).casefold() for part in data.bodyparts.values()}
+        self.enemy_has_weakpoint = any("weakpoint" in part_type for part_type in part_types)
+        self.enemy_has_resistant = any("resistant" in part_type for part_type in part_types)
+        self._refresh_optimize_maximize_options()
         self.enemy_identity_rows = [
             DisplayRow("Name", str(data.name)),
             DisplayRow("Faction", str(data.faction)),
@@ -2033,8 +2188,23 @@ class CalculatorState(rx.State):
             {"name": selected, "type": config["kind"], "stats": {}, "runtime": {"rank": 0}}
         )
 
+    def _clear_calculation_results(self):
+        self.slot_contributions = ["—" for _ in SLOT_CONFIGS]
+        self.main_result_metrics = []
+        self.weakpoint_result_metrics = []
+        self.resistant_result_metrics = []
+        self.ranged_result_metrics = []
+        self.misc_result_metrics = []
+        self.result_metrics = []
+        self.damage_result_rows = []
+        self.contribution_result_rows = []
+        self.result_summary = ""
+        self.result_contribution_summary = ""
+        self.result_ready = False
+
     def _recalculate(self):
         try:
+            configuration_errors: list[str] = []
             try:
                 target = self._target_enemy()
                 self._refresh_enemy_preview(target)
@@ -2043,31 +2213,29 @@ class CalculatorState(rx.State):
                 self.enemy_bodypart_rows = []
                 self.enemy_modifier_rows = []
                 self.enemy_result_metrics = []
+                self.enemy_has_weakpoint = False
+                self.enemy_has_resistant = False
+                self._refresh_optimize_maximize_options()
                 self.enemy_error = f"{type(exc).__name__}: {exc}"
-                raise
+                configuration_errors.append(self.enemy_error)
+                target = None
+            if self.custom_weapon and not self.custom_weapon_entry.strip():
+                configuration_errors.append("ValueError: Custom Weapon JSON is required.")
+            if configuration_errors:
+                self._clear_calculation_results()
+                self.result_errors = configuration_errors
+                self.result_error = "\n".join(configuration_errors)
+                return
             if self.selected_weapon == NONE:
                 slot_upgrades = [self._slot_upgrade(index) for index in range(len(SLOT_CONFIGS))]
                 self.slot_stat_rows = [
                     self._slot_preview_rows(index, upgrade)
                     for index, upgrade in enumerate(slot_upgrades)
                 ]
-                self.slot_contributions = ["—" for _ in SLOT_CONFIGS]
-                self.main_result_metrics = []
-                self.weakpoint_result_metrics = []
-                self.resistant_result_metrics = []
-                self.ranged_result_metrics = []
-                self.misc_result_metrics = []
-                self.result_metrics = []
-                self.damage_result_rows = []
-                self.contribution_result_rows = []
-                self.result_summary = ""
-                self.result_contribution_summary = ""
+                self._clear_calculation_results()
                 self.result_error = "Select a weapon to calculate."
-                self.result_ready = False
+                self.result_errors = [self.result_error]
                 return
-
-            if self.custom_weapon and not self.custom_weapon_entry.strip():
-                raise ValueError("Custom Weapon JSON is required.")
 
             slot_upgrades = [
                 self._slot_upgrade(index) for index in range(len(SLOT_CONFIGS))
@@ -2141,8 +2309,8 @@ class CalculatorState(rx.State):
             self.slot_contributions = contributions
 
             self.main_result_metrics = main_metrics(weapon)
-            self.weakpoint_result_metrics = weakpoint_metrics(weapon)
-            self.resistant_result_metrics = resistant_metrics(weapon)
+            self.weakpoint_result_metrics = weakpoint_metrics(weapon) if self.enemy_has_weakpoint else []
+            self.resistant_result_metrics = resistant_metrics(weapon) if self.enemy_has_resistant else []
             self.misc_result_metrics = [] if self.selected_weapon_type == "Melee" else ranged_misc_metrics(weapon)
             self.result_metrics = self.main_result_metrics + self.weakpoint_result_metrics + self.resistant_result_metrics + self.misc_result_metrics
             self.ranged_result_metrics = self.result_metrics
@@ -2156,18 +2324,9 @@ class CalculatorState(rx.State):
                 contribution_lookup
             )
             self.result_error = ""
+            self.result_errors = []
             self.result_ready = True
         except Exception as exc:
-            self.slot_contributions = ["—" for _ in SLOT_CONFIGS]
-            self.main_result_metrics = []
-            self.weakpoint_result_metrics = []
-            self.resistant_result_metrics = []
-            self.ranged_result_metrics = []
-            self.misc_result_metrics = []
-            self.result_metrics = []
-            self.damage_result_rows = []
-            self.contribution_result_rows = []
-            self.result_summary = ""
-            self.result_contribution_summary = ""
+            self._clear_calculation_results()
             self.result_error = f"{type(exc).__name__}: {exc}"
-            self.result_ready = False
+            self.result_errors = [self.result_error]
