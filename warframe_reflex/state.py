@@ -98,6 +98,7 @@ from .models import (
 NONE = "None"
 CUSTOM = "Custom"
 RIVEN = "Riven"
+RIVEN_EMPTY_STAT = "Select stat"
 
 ALL_UPGRADE_FIELDS = tuple(dict.fromkeys((*MOD_FIELD, *ARCANE_FIELD, *BUFF_FIELD)))
 FIELD_LABEL_TO_NAME = {field_label(name): name for name in ALL_UPGRADE_FIELDS}
@@ -124,7 +125,7 @@ BASE_NUMBER_BOUNDS: dict[str, tuple[float, float, bool]] = {
     "base_charge_time": (0.0, 20.0, False),
     "base_burst_count": (1.0, 100.0, True),
     "base_burst_delay": (0.0, 20.0, False),
-    "progenitor_value": (0.0, 10.0, False),
+    "progenitor_value": (0.0, 0.6, False),
     "ability_strength": (0.0, 1000.0, False),
 }
 
@@ -144,48 +145,71 @@ def _empty_nested_list() -> list[list[Any]]:
     return [[] for _ in SLOT_CONFIGS]
 
 
+def _empty_riven_editor_field() -> EditorField:
+    return EditorField("", RIVEN_EMPTY_STAT, 0.0, 0.0, 0.0, False)
+
+
 def _custom_weapon_template(
     weapon_type_name: str = "Primary",
     weapon_category: str = "Rifle",
 ) -> str:
     melee = weapon_type_name == "Melee"
-    stats = {
+    if melee:
+        return json.dumps(
+            {
+                "name": "Custom Melee",
+                "type": "melee",
+                "subtype": "sword",
+                "exalted": False,
+                "attacks": {
+                    "normal_attack": {
+                        "trigger": "melee",
+                        "delivery": "melee",
+                        "form": "normal",
+                        "stats": {
+                            "damage": {"impact": 20, "puncture": 25, "slash": 55},
+                            "forced_procs": {"slash": 1},
+                            "crit_chance": 0.24,
+                            "crit_damage": 2.2,
+                            "status_chance": 0.3,
+                            "attack_speed": 1.0,
+                            "range": 2.5,
+                        },
+                    }
+                },
+                "disposition": 1.0,
+                "runtime": {"attack": "normal_attack", "combo": 12, "stance_combo": "neutral"},
+            },
+            indent=2,
+        )
+
+    category = weapon_category.casefold()
+    type_name = weapon_type_name.casefold()
+    trigger = "charge" if weapon_category == "Bow" else "auto" if weapon_category == "Rifle" else "semi"
+    delivery = "projectile" if weapon_category == "Bow" else "hitscan"
+    stats: dict[str, Any] = {
         "damage": {"impact": 30, "puncture": 45, "slash": 25},
         "forced_procs": {"slash": 1},
         "crit_chance": 0.24,
         "crit_damage": 2.2,
         "status_chance": 0.3,
+        "multishot": 8 if weapon_category == "Shotgun" else 1,
+        "fire_rate": 1.2 if weapon_category == "Bow" else 3.5,
+        "ammo_cost": 1,
+        "weakpoint_damage": 3.5 if weapon_category == "Sniper" else 3,
     }
-    if melee:
-        stats["attack_speed"] = 1.0
-    else:
-        stats.update(
-            {
-                "multishot": 1,
-                "fire_rate": 3.5,
-                "ammo_cost": 1,
-                "weakpoint_damage": 3,
-            }
-        )
-    entry: dict[str, Any] = {
-        "name": "Custom Weapon",
-        "type": weapon_type_name.casefold(),
-        "subtype": weapon_category.casefold(),
-        "progenitor": True,
-        "attacks": {
-            "normal_attack": {
-                "trigger": "melee" if melee else "semi",
-                "delivery": "melee" if melee else "hitscan",
-                "form": "normal",
-                "stats": stats,
-            }
-        },
-        "disposition": 1.0,
-    }
-    if not melee:
-        entry["attacks"]["normal_attack"]["children"] = ["radial_attack"]
-        entry["attacks"]["radial_attack"] = {
-            "trigger": "semi",
+    if weapon_category == "Bow":
+        stats["charge_time"] = 0.8
+    if weapon_category == "Sniper":
+        stats.update({"zoom": 2.5, "crit_chance": 0.32})
+    if weapon_category == "Pistol":
+        stats.update({"recoil": 0.2, "fire_rate": 5.0})
+    normal_attack: dict[str, Any] = {"trigger": trigger, "delivery": delivery, "form": "normal", "stats": stats}
+    attacks: dict[str, Any] = {"normal_attack": normal_attack}
+    if weapon_category == "Rifle":
+        normal_attack["children"] = ["radial_attack"]
+        attacks["radial_attack"] = {
+            "trigger": "auto",
             "delivery": "projectile",
             "aoe": True,
             "form": "normal",
@@ -197,18 +221,20 @@ def _custom_weapon_template(
                 "status_chance": 0.3,
                 "multishot": 1,
                 "fire_rate": 3.5,
-                "falloff": {
-                    "start_range": 0,
-                    "end_range": 5,
-                    "final_multiplier": 0.5,
-                },
+                "falloff": {"start_range": 0, "end_range": 5, "final_multiplier": 0.5},
             },
         }
-        entry["ammo"] = {
-            "reload_time": 2.0,
-            "magazine_size": 30,
-            "recharge_rate": 10.0,
-        }
+    entry: dict[str, Any] = {
+        "name": f"Custom {weapon_category}",
+        "type": type_name,
+        "subtype": category,
+        "exalted": False,
+        "progenitor": True,
+        "ammo": {"reload_time": 2.0, "magazine_size": 1 if weapon_category == "Bow" else 30, "recharge_rate": 10.0},
+        "attacks": attacks,
+        "disposition": 1.0,
+        "runtime": {"attack": "normal_attack"},
+    }
     return json.dumps(entry, indent=2)
 
 
@@ -218,13 +244,13 @@ def _custom_enemy_template() -> str:
             "name": "Custom Enemy",
             "faction": "Grineer",
             "base_level": 1,
-            "runtime": {"level": 100, "steel_path": False, "empowered": False},
             "stats": {"health": 300, "shields": 0, "armor": 500, "overguard": 0},
             "bodyparts": {
                 "body": {"type": "normal", "multiplier": 1.0},
                 "head": {"type": "weakpoint", "multiplier": 3.0},
             },
             "modifiers": {"corrosive": 1.5, "impact": 1.5},
+            "runtime": {"level": 100, "steel_path": False, "empowered": False},
         },
         indent=2,
     )
@@ -234,44 +260,58 @@ def _custom_upgrade_templates(
     weapon_type_name: str = "Primary",
     weapon_category: str = "Rifle",
 ) -> list[str]:
+    melee = weapon_type_name == "Melee"
     entries = []
     for config in SLOT_CONFIGS:
-        entry = {
-            "name": f"Custom {config['label']}",
-            "type": config["kind"],
-            "max_rank": 10 if config["kind"] == "mod" else 5,
-            "stats": {
-                "damage_bonus": [
-                    {"value": 1.65, "mode": "proportional"},
-                    {
-                        "value": 0.15,
-                        "mode": "base",
-                        "when": "on_headshot",
-                    },
-                ],
-                "crit_chance": [{"value": 0.2, "mode": "flat"}],
-                "crit_damage": [
-                    {
-                        "value": 0.1,
-                        "mode": "proportional",
-                        "stacks": {"when": "stacks", "max": 5},
-                    }
-                ],
-            },
-            "runtime": {
-                "rank": 10 if config["kind"] == "mod" else 5,
-                "stacks": 5,
-                "on_headshot": True,
-            },
-        }
-        if config["exilus"]:
-            entry["compatibility"] = {"exilus": True}
         if config.get("stance"):
-            entry["compatibility"] = {**(entry.get("compatibility") or {}), "stance": True}
-            entry["combos"] = {
-                "neutral": {"name": "Neutral", "multiplier": 1.0, "hits": 1, "duration": 1.0},
+            entry = {
+                "name": "Custom Stance",
+                "type": "mod",
+                "max_rank": 10,
+                "compatibility": {"stance": True, "subtypes": ["sword"]},
+                "combos": {
+                    "neutral": {"name": "Neutral", "multiplier": 1.0, "hits": 1, "duration": 1.0},
+                    "forward": {"name": "Forward", "multiplier": 1.5, "hits": 2, "duration": 1.2},
+                },
+                "runtime": {"rank": 10},
             }
-            entry["stats"] = {}
+        elif config["kind"] == "arcane":
+            trigger = "kill" if melee else "headshot"
+            entry = {
+                "name": "Custom Arcane",
+                "type": "arcane",
+                "max_rank": 5,
+                "stats": {
+                    "damage_bonus": [{"value": 0.3, "stacks": {"when": trigger, "max": 5}}],
+                    ("crit_damage" if melee else "ammo_efficiency"): [{"value": 0.2, "rank": 3}],
+                },
+                "runtime": {"rank": 5, trigger: 5},
+            }
+        elif config["exilus"]:
+            trigger = "kill" if melee else "headshot"
+            entry = {
+                "name": "Custom Exilus",
+                "type": "mod",
+                "max_rank": 10,
+                "stats": {
+                    ("range" if melee else "projectile_speed"): [{"value": 0.4}],
+                    ("attack_speed" if melee else "accuracy"): [{"value": 0.25, "when": trigger}],
+                },
+                "compatibility": {"exilus": True},
+                "runtime": {"rank": 10, trigger: True},
+            }
+        else:
+            entry = {
+                "name": f"Custom {config['label']}",
+                "type": "mod",
+                "max_rank": 10,
+                "stats": {
+                    "damage_bonus": [{"value": 1.65, "mode": "proportional"}],
+                    "status_chance": [{"value": 0.6, "when": "ability_cast"}],
+                    ("attack_speed" if melee else "multishot"): [{"value": 0.15, "stacks": {"when": "kill", "max": 5}}],
+                },
+                "runtime": {"rank": 10, "ability_cast": True, "kill": 5},
+            }
         entries.append(json.dumps(entry, indent=2))
     return entries
 
@@ -411,6 +451,8 @@ class CalculatorState(rx.State):
     )
     slot_fields: list[list[EditorField]] = rx.field(default_factory=_empty_nested_list)
     slot_available_fields: list[list[str]] = rx.field(default_factory=_empty_nested_list)
+    slot_riven_field_options: list[list[list[str]]] = rx.field(default_factory=_empty_nested_list)
+    slot_riven_row_labels: list[list[str]] = rx.field(default_factory=_empty_nested_list)
     slot_pending_fields: list[str] = rx.field(
         default_factory=lambda: ["" for _ in SLOT_CONFIGS]
     )
@@ -425,6 +467,7 @@ class CalculatorState(rx.State):
     )
     slot_editor_open: list[bool] = rx.field(default_factory=lambda: [False for _ in SLOT_CONFIGS])
     clear_keep_slots: list[bool] = rx.field(default_factory=lambda: [False for _ in SLOT_CONFIGS])
+    clear_keep_buffs: bool = False
     optimize_find_riven: bool = False
     optimize_find_evolutions: bool = False
     optimize_maximize_target: str = DEFAULT_OPTIMIZE_MAXIMIZE
@@ -494,7 +537,7 @@ class CalculatorState(rx.State):
 
     @rx.var
     def optimizer_enabled(self) -> bool:
-        return self.selected_weapon != NONE
+        return self.selected_weapon != NONE and self.selected_enemy != NONE
 
     @rx.var
     def riven_optimize_disabled(self) -> bool:
@@ -565,7 +608,10 @@ class CalculatorState(rx.State):
             keep_slots[index] = False
         self.clear_keep_slots = keep_slots
         self.slot_editor_open = [False for _ in SLOT_CONFIGS]
-        self.external_fields = []
+        if not (keep_marked and self.clear_keep_buffs):
+            self.external_fields = []
+        if not keep_marked:
+            self.clear_keep_buffs = False
         self._refresh_external_field_options()
 
     def _reset_for_weapon_change(self):
@@ -779,9 +825,7 @@ class CalculatorState(rx.State):
     def set_slot_editor_open(self, index: int, value: bool):
         if not 0 <= index < len(SLOT_CONFIGS):
             return
-        open_editors = list(self.slot_editor_open)
-        open_editors[index] = bool(value)
-        self.slot_editor_open = open_editors
+        self.slot_editor_open = [bool(value) and position == index for position in range(len(SLOT_CONFIGS))]
 
     @rx.event
     def set_clear_keep_slot(self, index: int, value: bool):
@@ -790,6 +834,10 @@ class CalculatorState(rx.State):
         keep_slots = list(self.clear_keep_slots)
         keep_slots[index] = bool(value)
         self.clear_keep_slots = keep_slots
+
+    @rx.event
+    def set_clear_keep_buffs(self, value: bool):
+        self.clear_keep_buffs = bool(value)
 
     @rx.event
     def clear_build_and_buffs(self):
@@ -1000,7 +1048,7 @@ class CalculatorState(rx.State):
         import queue as sync_queue
 
         async with self:
-            if self.selected_weapon == NONE or self.optimize_running:
+            if self.selected_weapon == NONE or self.selected_enemy == NONE or self.optimize_running:
                 return
             self.optimize_running = True
             self.optimize_status = ""
@@ -1049,7 +1097,7 @@ class CalculatorState(rx.State):
                         condition=self.slot_conditions_enabled[index],
                         custom_entry=self.custom_upgrade_entries[index],
                         riven_roll=self.slot_riven_rolls[index],
-                        riven_fields={field.name: float(field.value) for field in self.slot_fields[index]},
+                        riven_fields={field.name: float(field.value) for field in self.slot_fields[index] if field.name},
                     )
                     for index, config in enumerate(SLOT_CONFIGS)
                 ],
@@ -1183,6 +1231,34 @@ class CalculatorState(rx.State):
             self.slot_pending_fields = pending
 
     @rx.event
+    def set_riven_stat(self, index: int, position: int, label: str):
+        if not 0 <= index < len(SLOT_CONFIGS) or self.slot_selected_upgrades[index] != RIVEN:
+            return
+        positive_count, negative_count, _bonus, _malus = self._riven_roll_config(index)
+        if not 0 <= position < positive_count + negative_count:
+            return
+        all_fields = copy.deepcopy(self.slot_fields)
+        while len(all_fields[index]) < positive_count + negative_count:
+            all_fields[index].append(_empty_riven_editor_field())
+        if label == RIVEN_EMPTY_STAT:
+            all_fields[index][position] = _empty_riven_editor_field()
+        else:
+            field_name = self._riven_field_from_label(label)
+            if not field_name or any(field.name == field_name for other_position, field in enumerate(all_fields[index]) if other_position != position):
+                return
+            limits = self._riven_field_limits(index, field_name, position >= positive_count)
+            if limits is None:
+                return
+            min_value, max_value = limits
+            current = all_fields[index][position]
+            value = clamp_number(float(current.value), min_value, max_value) if current.name == field_name else (min_value + max_value) / 2
+            all_fields[index][position] = EditorField(field_name, field_label(field_name), value, min_value, max_value, False)
+        self.slot_fields = all_fields
+        self._invalidate_optimizer_result()
+        self._refresh_slot_field_options()
+        self._recalculate()
+
+    @rx.event
     def set_riven_roll(self, index: int, value: str):
         if (
             not 0 <= index < len(SLOT_CONFIGS)
@@ -1221,24 +1297,15 @@ class CalculatorState(rx.State):
             positive_count, negative_count, _bonus, _malus = (
                 self._riven_roll_config(index)
             )
-            position = len(all_fields[index])
-            if position >= positive_count + negative_count:
+            position = next((position for position, field in enumerate(all_fields[index]) if not field.name), None)
+            if position is None or position >= positive_count + negative_count:
                 return
             negative = position >= positive_count
             limits = self._riven_field_limits(index, field_name, negative)
             if limits is None:
                 return
             min_value, max_value = limits
-            all_fields[index].append(
-                EditorField(
-                    field_name,
-                    field_label(field_name),
-                    (min_value + max_value) / 2,
-                    min_value,
-                    max_value,
-                    False,
-                )
-            )
+            all_fields[index][position] = EditorField(field_name, field_label(field_name), (min_value + max_value) / 2, min_value, max_value, False)
             self.slot_fields = all_fields
             self._invalidate_optimizer_result()
             self._refresh_slot_field_options()
@@ -1840,13 +1907,20 @@ class CalculatorState(rx.State):
         maximum_fields = positive_count + negative_count
         fields = copy.deepcopy(self.slot_fields)
         refreshed: list[EditorField] = []
-        for position, field in enumerate(fields[index][:maximum_fields]):
+        current_fields = fields[index][:maximum_fields]
+        while len(current_fields) < maximum_fields:
+            current_fields.append(_empty_riven_editor_field())
+        for position, field in enumerate(current_fields):
+            if not field.name:
+                refreshed.append(_empty_riven_editor_field())
+                continue
             limits = self._riven_field_limits(
                 index,
                 field.name,
                 position >= positive_count,
             )
             if limits is None:
+                refreshed.append(_empty_riven_editor_field())
                 continue
             minimum, maximum = limits
             field.min_value = minimum
@@ -1867,33 +1941,41 @@ class CalculatorState(rx.State):
 
     def _refresh_slot_field_options(self):
         available_all: list[list[str]] = []
+        riven_options_all: list[list[list[str]]] = [[] for _ in SLOT_CONFIGS]
+        riven_labels_all: list[list[str]] = [[] for _ in SLOT_CONFIGS]
+        all_fields = copy.deepcopy(self.slot_fields)
         pending = list(self.slot_pending_fields)
         for index, config in enumerate(SLOT_CONFIGS):
-            selected_names = {field.name for field in self.slot_fields[index]}
             if self.slot_selected_upgrades[index] == RIVEN:
-                positive_count, negative_count, _bonus, _malus = (
-                    self._riven_roll_config(index)
-                )
-                position = len(self.slot_fields[index])
+                positive_count, negative_count, _bonus, _malus = self._riven_roll_config(index)
                 maximum_fields = positive_count + negative_count
-                available_names = (
-                    [
-                        field_name
-                        for field_name in self._riven_base_stats()
-                        if field_name not in selected_names
-                        and (
-                            position < positive_count
-                            or field_name not in RIVEN_NON_NEGATIVE_STATS
-                        )
-                    ]
-                    if position < maximum_fields
-                    else []
-                )
-                labels = [field_label(field_name) for field_name in available_names]
+                base_stats = self._riven_base_stats()
+                fields = all_fields[index][:maximum_fields]
+                while len(fields) < maximum_fields:
+                    fields.append(_empty_riven_editor_field())
+                seen: set[str] = set()
+                for position, field in enumerate(fields):
+                    if not field.name or field.name not in base_stats or field.name in seen or (position >= positive_count and field.name in RIVEN_NON_NEGATIVE_STATS):
+                        fields[position] = _empty_riven_editor_field()
+                    else:
+                        seen.add(field.name)
+                row_options: list[list[str]] = []
+                row_labels: list[str] = []
+                for position, field in enumerate(fields):
+                    selected_elsewhere = {other.name for other_position, other in enumerate(fields) if other_position != position and other.name}
+                    names = [name for name in base_stats if name not in selected_elsewhere and (position < positive_count or name not in RIVEN_NON_NEGATIVE_STATS)]
+                    row_options.append([RIVEN_EMPTY_STAT, *(field_label(name) for name in names)])
+                    row_labels.append(f"Positive {position + 1}" if position < positive_count else f"Negative {position - positive_count + 1}")
+                all_fields[index] = fields
+                riven_options_all[index] = row_options
+                riven_labels_all[index] = row_labels
+                first_empty = next((position for position, field in enumerate(fields) if not field.name), None)
+                labels = [label for label in row_options[first_empty] if label != RIVEN_EMPTY_STAT] if first_empty is not None else []
                 available_all.append(labels)
                 if pending[index] not in labels:
                     pending[index] = labels[0] if labels else ""
                 continue
+            selected_names = {field.name for field in all_fields[index] if field.name}
             available_names = [
                 field_name
                 for field_name in config["options"]
@@ -1908,7 +1990,10 @@ class CalculatorState(rx.State):
             available_all.append(labels)
             if pending[index] not in labels:
                 pending[index] = labels[0] if labels else ""
+        self.slot_fields = all_fields
         self.slot_available_fields = available_all
+        self.slot_riven_field_options = riven_options_all
+        self.slot_riven_row_labels = riven_labels_all
         self.slot_pending_fields = pending
 
     def _refresh_external_field_options(self):
@@ -2078,11 +2163,13 @@ class CalculatorState(rx.State):
         name: str,
         fields: list[EditorField],
     ) -> Upgrade:
-        return build_upgrade(name, {field.name: field.value for field in fields})
+        return build_upgrade(name, {field.name: field.value for field in fields if field.name})
 
     def _riven_stat_rows(self, index: int) -> list[DisplayRow]:
         rows: list[DisplayRow] = []
         for field in self.slot_fields[index]:
+            if not field.name:
+                continue
             value = float(field.value)
             if field.name in RIVEN_FLAT_STAT_UNITS:
                 unit = RIVEN_FLAT_STAT_UNITS[field.name]
@@ -2244,6 +2331,11 @@ class CalculatorState(rx.State):
                 self._slot_preview_rows(index, upgrade)
                 for index, upgrade in enumerate(slot_upgrades)
             ]
+            if self.no_enemy:
+                self._clear_calculation_results()
+                self.result_error = "Select an enemy to calculate."
+                self.result_errors = [self.result_error]
+                return
             progenitor = progenitor_upgrade(
                 self.progenitor_element
                 if self._supports_progenitor()

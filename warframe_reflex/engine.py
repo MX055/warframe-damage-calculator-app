@@ -280,26 +280,98 @@ def is_non_empty_upgrade(item: Upgrade) -> bool:
     return bool((item.data.compatibility or {}).get("stance"))
 
 
+SPECIAL_STAT_LABELS = {
+    "afflictions_proc_multiplier": "Proc Stack Multiplier",
+    "cascadia_empowered_proc": "Damage per Status Proc",
+    "crit_reset_charges": "Big Critical Hits Before Reset",
+    "duplicated_hit": "Duplicate Hit Chance",
+    "fire_rate_lock": "Fire Rate Locked",
+    "hunter_munitions": "Slash Proc Chance on Critical Hit",
+    "internal_bleeding": "Slash Proc Chance on Impact Proc",
+    "melee_doughty": "Critical Damage / 10% Puncture Status Chance",
+    "melee_duplicate": "Duplicate Hit Chance near Yellow Critical Tier",
+    "multishot_lock": "Multishot Locked",
+    "primed_chamber": "Damage on First Shot",
+    "random_proc": "Random Status Effect Chance",
+    "secondary_encumber": "Random Status Effect Chance on Status Proc",
+    "secondary_enervate": "Big Critical Hits Before Reset",
+    "slash_proc": "Slash Proc Chance",
+    "vigilante_bonus": "Critical Tier Upgrade Chance",
+}
+
+
+def stat_label(field_name: str) -> str:
+    return SPECIAL_STAT_LABELS.get(field_name, field_label(field_name))
+
+
+def condition_label(condition: object) -> str:
+    text = " ".join(str(condition).replace("_", " ").replace("-", " ").split())
+    if text.casefold().startswith("on "):
+        text = text[3:]
+    return text.title()
+
+
+def behavior_stat_label(field_name: str, behavior: str, behavior_data: Mapping[str, object]) -> str:
+    base = stat_label(field_name)
+    if behavior == "WEAPON_COMBO":
+        return f"{base} / Combo Multiplier"
+    if behavior == "FIRST_SHOT":
+        return f"{base} on First Shot"
+    if behavior == "LAST_SHOT":
+        return f"{base} on Last Shot"
+    if behavior == "DOUBLE_FOR_BOWS":
+        return f"{base} (Doubled for Bows)"
+    if behavior == "UNIQUE_STATUS":
+        return f"{base} / Unique Status Type"
+    if behavior == "ON_NON_CRIT":
+        return f"{base} on Non-Critical Hit"
+    if behavior == "ON_IMPACT_DOUBLE_BELOW_2_5_FR":
+        threshold = behavior_data.get("fire_rate_threshold", 2.5)
+        return f"{base} on Impact Proc (Doubled below {float(threshold):g} Fire Rate)"
+    if behavior == "ON_CRIT":
+        return f"{base} on Critical Hit"
+    if behavior == "ON_HIT":
+        return "Critical Tier Upgrade Chance on Hit" if field_name == "crit_chance" else f"{base} on Hit"
+    if behavior == "ON_ANY_PROC":
+        return "Random Status Effect Chance on Status Proc"
+    if behavior == "NEAR_YELLOW":
+        return "Duplicate Hit Chance near Yellow Critical Tier"
+    if behavior == "FROM_PUNCTURE_X_STATUS":
+        per = float(behavior_data.get("per", 0.1))
+        return f"{base} / {per:.0%} Puncture Status Chance"
+    if behavior == "STACK_RESET_CRIT_2_PLUS":
+        return "Big Critical Hits Before Critical Chance Reset"
+    if behavior == "STATUS_PROC_STACKS":
+        status = condition_label(behavior_data.get("status", "Status"))
+        return f"{base} / {status} Proc"
+    if behavior == "MULTISHOT_CONSUMES_AMMO":
+        return f"{base} (Consumes Ammo)"
+    return base
+
+
 def format_stat_value(
-    value: float | int | bool,
+    value: object,
     *,
     field_name: str | None = None,
 ) -> str:
     if isinstance(value, bool):
         return "Yes" if value else "No"
 
-    # Secondary Enervate stores the number of Big Critical Hits required
-    # before the bonus resets. It is a count, not a percentage.
-    if field_name == "secondary_enervate":
-        return str(int(value))
+    if isinstance(value, str):
+        return condition_label(value)
+    if isinstance(value, Mapping):
+        return ", ".join(f"{condition_label(key)}: {item}" for key, item in value.items())
+    if isinstance(value, (list, tuple)):
+        return ", ".join(map(str, value))
+
+    if field_name in {"crit_reset_charges", "secondary_enervate"}:
+        return f"{int(float(value))} hits"
 
     flat_units = {
-        "afflictions_proc_multiplier": "",
         "cascadia_empowered_proc": "",
         "combo_duration": "s",
         "explosion_radius": "m",
         "initial_combo": "",
-        "overguard_damage_multiplier": "",
         "punch_through": "m",
         "range": "m",
     }
@@ -307,6 +379,9 @@ def format_stat_value(
         unit = flat_units[field_name]
         formatted = f"{float(value):,.3f}".rstrip("0").rstrip(".")
         return f"{formatted} {unit}".rstrip()
+
+    if field_name in {"afflictions_proc_multiplier", "overguard_damage_multiplier"}:
+        return f"{float(value):g}x"
 
     return f"{float(value):,.1%}"
 
@@ -317,100 +392,55 @@ def upgrade_stat_rows(
 ) -> list[DisplayRow]:
     rows: list[DisplayRow] = []
 
-    def add_stat(field_name: str, value, suffix: str = "") -> None:
+    def add_stat(field_name: str, value, label: str | None = None) -> None:
         if field_name == "damage" and isinstance(value, (Dist, Mapping)):
             for damage_type, damage_value in Dist(value):
                 if damage_value != 0:
-                    rows.append(DisplayRow(field_label(damage_type) + suffix, format_stat_value(damage_value, field_name=damage_type)))
+                    damage_label = stat_label(damage_type)
+                    if label and label != stat_label(field_name):
+                        suffix = label.removeprefix(stat_label(field_name))
+                        damage_label = f"{damage_label}{suffix}" if suffix else damage_label
+                    rows.append(DisplayRow(damage_label, format_stat_value(damage_value, field_name=damage_type)))
             return
         if value != 0 and value is not False:
-            rows.append(DisplayRow(field_label(field_name) + suffix, format_stat_value(value, field_name=field_name)))
+            rows.append(DisplayRow(label or stat_label(field_name), format_stat_value(value, field_name=field_name)))
 
+    def add_effect(field_name: str, raw_effect: object) -> None:
+        if not isinstance(raw_effect, Mapping) or "value" not in raw_effect:
+            add_stat(field_name, raw_effect)
+            return
+        value = raw_effect["value"]
+        behavior = str(raw_effect.get("behavior") or "")
+        behavior_data = raw_effect.get("behavior_data")
+        behavior_data = behavior_data if isinstance(behavior_data, Mapping) else {}
+        label = behavior_stat_label(field_name, behavior, behavior_data) if behavior else stat_label(field_name)
+        mode = normalize_effect_mode(raw_effect.get("mode"))
+        if mode != "proportional":
+            label += f" ({field_label(mode)})"
+        required_rank = raw_effect.get("rank")
+        if required_rank is not None:
+            label += f" at Rank {required_rank}"
+        stacks = raw_effect.get("stacks")
+        condition = raw_effect.get("when")
+        if isinstance(stacks, Mapping):
+            label += f" / {condition_label(stacks.get('when', 'stacks'))}"
+        elif condition:
+            label += f" on {condition_label(condition)}"
+        required_upgrade = raw_effect.get("equipped")
+        if required_upgrade:
+            required_names = required_upgrade if isinstance(required_upgrade, list) else [required_upgrade]
+            label += f" with {', '.join(map(str, required_names))}"
+        add_stat(field_name, value, label)
+
+    existing_fields = set()
     for field_name, effects in upgrade.data.stats.items():
+        existing_fields.add(field_name)
         for raw_effect in effects if isinstance(effects, list) else [effects]:
-            if isinstance(raw_effect, Mapping) and "value" in raw_effect:
-                value = raw_effect["value"]
-                stack = raw_effect.get("stacks")
-                stacks_on = stack.get("when") if isinstance(stack, Mapping) else None
-                condition = stacks_on or raw_effect.get("when")
-                required_rank = raw_effect.get("rank")
-                qualifiers = []
-                mode = normalize_effect_mode(raw_effect.get("mode"))
-                if mode != "proportional":
-                    qualifiers.append(str(mode))
-                if required_rank is not None:
-                    qualifiers.append(f"rank {required_rank}")
-                elif condition:
-                    qualifiers.append(str(condition))
-                required_upgrade = raw_effect.get("equipped")
-                if required_upgrade:
-                    required_names = (
-                        required_upgrade
-                        if isinstance(required_upgrade, list)
-                        else [required_upgrade]
-                    )
-                    qualifiers.append(f"with {', '.join(map(str, required_names))}")
-                stacking = stacks_on is not None
-                suffix = " / stack" if stacking else ""
-                if qualifiers:
-                    suffix += f" ({'; '.join(qualifiers)})"
-                add_stat(field_name, value, suffix)
-            else:
-                add_stat(field_name, raw_effect)
-
-    flat_units = {
-        "afflictions_proc_multiplier": "",
-        "cascadia_empowered_proc": "",
-        "combo_duration": "s",
-        "explosion_radius": "m",
-        "initial_combo": "",
-        "overguard_damage_multiplier": "",
-        "punch_through": "m",
-        "range": "m",
-    }
-    existing_fields = set(upgrade.data.stats)
+            add_effect(field_name, raw_effect)
     for field_name, effects in (extra_stats or {}).items():
-        if field_name in existing_fields:
-            continue
-        for raw_effect in effects if isinstance(effects, list) else [effects]:
-            value = (
-                raw_effect.get("value")
-                if isinstance(raw_effect, Mapping)
-                else raw_effect
-            )
-            if value in (None, 0, False):
-                continue
-            qualifiers: list[str] = []
-            if isinstance(raw_effect, Mapping):
-                mode = normalize_effect_mode(raw_effect.get("mode"))
-                if mode != "proportional":
-                    qualifiers.append(str(mode))
-                condition = raw_effect.get("when")
-                stacks = raw_effect.get("stacks")
-                if isinstance(stacks, Mapping):
-                    condition = stacks.get("when", condition)
-                    maximum = stacks.get("max")
-                    qualifiers.append(
-                        f"{condition or 'stacks'}"
-                        + (f", max {maximum}" if maximum is not None else "")
-                    )
-                elif condition:
-                    qualifiers.append(str(condition))
-            label = field_label(field_name)
-            if qualifiers:
-                label += f" ({'; '.join(qualifiers)})"
-            if isinstance(value, bool):
-                formatted = "Yes" if value else "No"
-            elif field_name in flat_units:
-                unit = flat_units[field_name]
-                formatted = f"{float(value):,.3f}".rstrip("0").rstrip(".")
-                if unit:
-                    formatted = f"{formatted} {unit}"
-            elif isinstance(value, (int, float)):
-                formatted = f"{float(value):,.1%}"
-            else:
-                formatted = str(value)
-            rows.append(DisplayRow(label, formatted))
+        if field_name not in existing_fields:
+            for raw_effect in effects if isinstance(effects, list) else [effects]:
+                add_effect(field_name, raw_effect)
     return rows
 
 def progenitor_upgrade(element: str, value: float, no_effect: str) -> Upgrade:

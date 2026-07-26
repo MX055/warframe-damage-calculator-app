@@ -310,7 +310,7 @@ def progenitor_controls() -> rx.Component:
             CalculatorState.progenitor_value,
             lambda value: CalculatorState.set_base_number("progenitor_value", value),
             minimum=0,
-            maximum=10,
+            maximum=0.6,
         ),
         columns=rx.breakpoints(initial="1", sm="2"),
         gap="4",
@@ -760,47 +760,36 @@ def custom_slot_body(index: int) -> rx.Component:
     )
 
 
+def riven_editor_row(field: rx.Var[EditorField], position, index: int) -> rx.Component:
+    return rx.vstack(
+        rx.text(CalculatorState.slot_riven_row_labels[index][position], class_name="compact-label"),
+        rx.grid(
+            select_input(CalculatorState.slot_riven_field_options[index][position], field.label, lambda value: CalculatorState.set_riven_stat(index, position, value)),
+            rx.input(type="number", value=field.value, min=field.min_value, max=field.max_value, step="0.001", on_change=lambda value: CalculatorState.set_slot_field_value(index, field.name, value), debounce_timeout=250, disabled=field.name == "", width="100%"),
+            columns="minmax(0, 1fr) minmax(96px, 0.42fr)",
+            column_gap="8px",
+            width="100%",
+            class_name="riven-stat-row",
+        ),
+        width="100%",
+        gap="1",
+        align="start",
+    )
+
+
 def riven_slot_body(index: int) -> rx.Component:
-    available = CalculatorState.slot_available_fields[index]
     return rx.vstack(
         select_control(
-            "Riven Roll",
+            "Riven Type",
             RIVEN_ROLL_OPTIONS,
             CalculatorState.slot_riven_rolls[index],
             lambda value: CalculatorState.set_riven_roll(index, value),
         ),
-        rx.grid(
-            rx.select(
-                available,
-                value=CalculatorState.slot_pending_fields[index],
-                on_change=lambda value: CalculatorState.set_slot_pending_field(
-                    index, value
-                ),
-                disabled=available.length() == 0,
-                width="100%",
-                position="popper",
-            ),
-            rx.button(
-                "+",
-                on_click=CalculatorState.add_slot_field(index),
-                disabled=available.length() == 0,
-                class_name="icon-button field-action-button",
-            ),
-            columns="minmax(0, 1fr) 32px",
-            column_gap="8px",
+        rx.vstack(
+            rx.foreach(CalculatorState.slot_fields[index], lambda field, position: riven_editor_row(field, position, index)),
             width="100%",
-        ),
-        rx.cond(
-            CalculatorState.slot_fields[index].length() > 0,
-            rx.vstack(
-                rx.foreach(
-                    CalculatorState.slot_fields[index],
-                    lambda field: slot_editor_field(field, index),
-                ),
-                width="100%",
-                gap="2",
-            ),
-            rx.text("No Riven stats added.", class_name="empty-text"),
+            gap="3",
+            class_name="riven-stat-list",
         ),
         width="100%",
         gap="3",
@@ -963,7 +952,13 @@ def clear_build_menu() -> rx.Component:
                     rx.vstack(*[clear_upgrade_row(index) for index in OPTIMIZER_SLOT_ORDER], width="100%", gap="0", class_name="clear-build-list"),
                     rx.text("No upgrades equipped.", class_name="empty-text"),
                 ),
-                rx.button("Clear build & buffs", on_click=CalculatorState.clear_build_and_buffs, disabled=(~CalculatorState.has_build_or_buffs) | CalculatorState.optimize_running, color_scheme="red", variant="soft", width="100%"),
+                rx.hstack(
+                    rx.checkbox(checked=CalculatorState.clear_keep_buffs, on_change=CalculatorState.set_clear_keep_buffs, disabled=CalculatorState.optimize_running),
+                    rx.text("Keep external buffs", class_name="clear-build-keep-label"),
+                    align="center",
+                    gap="2",
+                ),
+                rx.button(rx.cond(CalculatorState.clear_keep_buffs, "Clear build (keep buffs)", "Clear build & buffs"), on_click=CalculatorState.clear_build_and_buffs, disabled=(~CalculatorState.has_build_or_buffs) | CalculatorState.optimize_running, color_scheme="red", variant="soft", width="100%"),
                 width="100%",
                 align="start",
                 gap="3",
@@ -1139,7 +1134,7 @@ def optimizer_exclusion_editor(title: str, description: str, options, pending, s
 
 
 def optimizer_run_controls() -> rx.Component:
-    disabled = CalculatorState.no_weapon | CalculatorState.optimize_running
+    disabled = CalculatorState.no_weapon | CalculatorState.no_enemy | CalculatorState.optimize_running
     return rx.vstack(
         select_control(
             "Maximize",
@@ -1242,6 +1237,7 @@ def optimizer_section() -> rx.Component:
                 ),
                 content=rx.vstack(
                     rx.cond(CalculatorState.no_weapon, rx.text("Select a weapon to configure and run optimization.", class_name="optimizer-warning")),
+                    rx.cond((~CalculatorState.no_weapon) & CalculatorState.no_enemy, rx.text("Select an enemy to run optimization.", class_name="optimizer-warning")),
                     rx.grid(
                         rx.vstack(
                             rx.text("Current build rules", class_name="optimizer-group-title"),
@@ -1301,7 +1297,6 @@ def optimizer_section() -> rx.Component:
             ),
             type="single",
             collapsible=True,
-            default_value="optimizer-menu",
             color_scheme="gray",
             variant="surface",
             width="100%",

@@ -174,8 +174,19 @@ body {
 }
 
 .preview-value {
+  flex-shrink: 0;
   font-variant-numeric: tabular-nums;
   font-weight: 650;
+}
+
+.preview-stat-row {
+  gap: 8px;
+  align-items: flex-start !important;
+}
+
+.preview-stat-row .preview-label {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .toggle-control {
@@ -456,6 +467,15 @@ textarea.database-entry-input::placeholder {
 .slot-card [data-radix-select-trigger],
 .slot-card input {
   min-width: 0;
+}
+
+.riven-stat-row > * {
+  min-width: 0;
+}
+
+.riven-stat-row input {
+  height: 32px !important;
+  min-height: 32px !important;
 }
 
 .slot-editor-shell {
