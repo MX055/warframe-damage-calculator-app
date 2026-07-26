@@ -357,6 +357,7 @@ class CalculatorState(rx.State):
     selected_enemy: str = NONE
     enemy_options: list[str] = rx.field(default_factory=lambda: [NONE, CUSTOM])
     enemy_select_open: bool = False
+    enemy_search: str = ""
     custom_enemy_entry: str = ""
     custom_enemy_placeholder: str = rx.field(default_factory=_custom_enemy_template)
     enemy_level: int = 100
@@ -531,6 +532,20 @@ class CalculatorState(rx.State):
     @rx.var
     def no_enemy(self) -> bool:
         return self.selected_enemy == NONE
+
+    @rx.var
+    def enemy_picker_options(self) -> list[str]:
+        """Filtered enemy list for the Soft picker — keep DOM small (~100 max)."""
+        options = list(self.enemy_options)
+        query = self.enemy_search.strip().casefold()
+        if query:
+            return [name for name in options if query in name.casefold()][:100]
+        priority: list[str] = []
+        for name in (NONE, CUSTOM, self.selected_enemy):
+            if name in options and name not in priority:
+                priority.append(name)
+        rest = [name for name in options if name not in priority]
+        return priority + rest[:80]
 
     @rx.var
     def show_enemy_inline_error(self) -> bool:
@@ -724,6 +739,12 @@ class CalculatorState(rx.State):
     @rx.event
     def set_enemy_select_open(self, value: bool):
         self.enemy_select_open = bool(value)
+        if value:
+            self.enemy_search = ""
+
+    @rx.event
+    def set_enemy_search(self, value: str):
+        self.enemy_search = value
 
     @rx.event
     def set_weapon(self, value: str):
@@ -742,6 +763,8 @@ class CalculatorState(rx.State):
 
     @rx.event
     def set_enemy(self, value: str):
+        self.enemy_select_open = False
+        self.enemy_search = ""
         self.selected_enemy = value if value in self.enemy_options else NONE
         self._invalidate_optimizer_result()
         self._recalculate()
