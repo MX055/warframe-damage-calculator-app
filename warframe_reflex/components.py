@@ -61,7 +61,38 @@ def select_input(
     *,
     disabled=False,
 ) -> rx.Component:
-    """Native select — Radix+foreach is too slow for large option lists (enemies/mods)."""
+    """Radix select — matches app chrome; use native_select_input for huge lists."""
+    return rx.select.root(
+        rx.select.trigger(
+            width="100%",
+            min_width="0",
+            max_width="100%",
+            height="32px",
+            min_height="32px",
+            class_name="full-width-select-trigger",
+            custom_attrs={"data-full-width-select": "true"},
+        ),
+        rx.select.content(
+            rx.select.group(
+                rx.foreach(options, lambda option: rx.select.item(option, value=option)),
+            ),
+            position="popper",
+        ),
+        value=value,
+        on_change=on_change,
+        disabled=disabled,
+        width="100%",
+    )
+
+
+def native_select_input(
+    options,
+    value,
+    on_change,
+    *,
+    disabled=False,
+) -> rx.Component:
+    """Native select for very large option lists (enemies/weapons) — much faster to sync."""
     return rx.el.select(
         rx.foreach(options, lambda option: rx.el.option(option, value=option)),
         value=value,
@@ -79,15 +110,12 @@ def select_control(
     on_change,
     *,
     disabled=False,
+    native: bool = False,
 ) -> rx.Component:
+    control = native_select_input if native else select_input
     return labeled_control(
         label,
-        select_input(
-            options,
-            value,
-            on_change,
-            disabled=disabled,
-        ),
+        control(options, value, on_change, disabled=disabled),
     )
 
 
@@ -510,6 +538,7 @@ def weapon_section() -> rx.Component:
                         CalculatorState.weapon_options,
                         CalculatorState.selected_weapon,
                         CalculatorState.set_weapon,
+                        native=True,
                     ),
                     columns=rx.breakpoints(initial="1", md="2"),
                     gap="4",
@@ -593,7 +622,7 @@ def enemy_section() -> rx.Component:
         section_title("Enemy", "Choose a database target or define a custom enemy."),
         panel(
             rx.vstack(
-                select_control("Enemy", CalculatorState.enemy_options, CalculatorState.selected_enemy, CalculatorState.set_enemy),
+                select_control("Enemy", CalculatorState.enemy_options, CalculatorState.selected_enemy, CalculatorState.set_enemy, native=True),
                 rx.cond(
                     CalculatorState.custom_enemy,
                     database_entry_input(
