@@ -1416,16 +1416,23 @@ def optimizer_run_controls() -> rx.Component:
             gap="2",
             width="100%",
         ),
-        rx.hstack(
+        rx.cond(
+            CalculatorState.optimize_running,
             rx.button(
-                rx.cond(CalculatorState.optimize_running, "Optimizing…", "Optimize build"),
-                on_click=CalculatorState.optimize_build, disabled=disabled, width="100%", size="3",
+                "Abort optimization",
+                on_click=CalculatorState.abort_optimization,
+                color_scheme="red",
+                variant="soft",
+                width="100%",
+                size="3",
             ),
-            rx.cond(
-                CalculatorState.optimize_running,
-                rx.button("Abort", on_click=CalculatorState.abort_optimization, color_scheme="red", variant="soft", size="3", min_width="96px"),
+            rx.button(
+                "Optimize build",
+                on_click=CalculatorState.optimize_build,
+                disabled=disabled,
+                width="100%",
+                size="3",
             ),
-            width="100%", gap="3",
         ),
         rx.cond(
             CalculatorState.optimize_running | (CalculatorState.optimize_progress > 0),
@@ -1721,6 +1728,13 @@ def results_section() -> rx.Component:
 
 def page() -> rx.Component:
     return rx.box(
+        rx.cond(
+            CalculatorState.any_slot_editor_open,
+            rx.box(
+                class_name="slot-editor-clickaway-backdrop",
+                on_click=CalculatorState.close_slot_editors,
+            ),
+        ),
         rx.vstack(
             header(),
             mobile_quick_nav(),
@@ -1735,5 +1749,4 @@ def page() -> rx.Component:
             align="start",
         ),
         class_name="page-shell",
-        on_click=CalculatorState.close_slot_editors,
     )

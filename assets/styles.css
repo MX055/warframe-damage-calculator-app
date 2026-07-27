@@ -78,8 +78,17 @@ body {
 }
 
 .slot-card {
+  position: relative;
+  z-index: 2;
   min-width: 0;
   padding: 0.9rem;
+}
+
+.slot-editor-clickaway-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+  background: transparent;
 }
 
 .slot-card:focus-within,

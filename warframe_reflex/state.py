@@ -1203,6 +1203,10 @@ class CalculatorState(rx.State):
     def optimize_direct_weight(self) -> int:
         return 100 - self.optimize_flat_dot_weight
 
+    @rx.var
+    def any_slot_editor_open(self) -> bool:
+        return any(self.slot_editor_open)
+
     @rx.event
     def close_slot_editors(self):
         if any(self.slot_editor_open):
