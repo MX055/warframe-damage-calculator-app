@@ -1351,7 +1351,7 @@ def optimizer_run_controls() -> rx.Component:
                     rx.hstack(
                         rx.text(rx.text.strong("Direct "), CalculatorState.optimize_direct_weight, "%", class_name="optimizer-help"),
                         rx.spacer(),
-                        rx.text(rx.text.strong("Flat DOT "), CalculatorState.optimize_flat_dot_weight, "%", class_name="optimizer-help"),
+                        rx.text(rx.text.strong("DOT "), CalculatorState.optimize_flat_dot_weight, "%", class_name="optimizer-help"),
                         width="100%",
                         align="center",
                     ),
