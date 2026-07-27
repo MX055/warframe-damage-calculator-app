@@ -6,7 +6,6 @@ from typing import Iterable
 
 from warframe_damage_calculator import Build, Enemy, Upgrade
 from warframe_damage_calculator.core.dist import Dist
-from warframe_damage_calculator.utils.constants import COMBO_HIT_INTERVAL, MAX_COMBO_MULTIPLIER
 
 from .constants import (
     DAMAGE_TYPES,
@@ -37,8 +36,23 @@ def parse_int(value: object, default: int = 0) -> int:
         return default
 
 
-def combo_multiplier_from_initial_combo(value: object) -> int:
-    return max(1, min(MAX_COMBO_MULTIPLIER, parse_int(value) // COMBO_HIT_INTERVAL + 1))
+def weapon_combo_rules(weapon) -> tuple[int, int]:
+    """Return the weapon-specific hits-per-tier interval and maximum combo multiplier."""
+    data = weapon.data
+    combo_interval = parse_int(
+        getattr(data, "combo_interval", getattr(data, "combo_hit_interval", 20)),
+        20,
+    )
+    max_combo = parse_int(
+        getattr(data, "max_combo", getattr(data, "max_combo_multiplier", 12)),
+        12,
+    )
+    return max(1, combo_interval), max(1, max_combo)
+
+
+def combo_multiplier_from_initial_combo(value: object, weapon) -> int:
+    combo_interval, max_combo = weapon_combo_rules(weapon)
+    return max(1, min(max_combo, parse_int(value) // combo_interval + 1))
 
 
 def clamp_number(
@@ -246,6 +260,8 @@ def weapon_payload(weapon_type_name: str, base_stats: dict, *, name: str = "") -
     reload_time = stats.pop("reload_speed", 0.0)
     magazine_size = stats.pop("magazine_capacity", 1)
     recharge_rate = stats.pop("recharge_rate", 0.0)
+    combo_interval = stats.pop("combo_interval", stats.pop("combo_hit_interval", 20))
+    max_combo = stats.pop("max_combo", stats.pop("max_combo_multiplier", 12))
     trigger = "charge" if stats.get("charge_time", 0) else "burst" if stats.get("burst_count", 1) > 1 else "auto"
     attack = {
         "trigger": trigger,
@@ -272,6 +288,8 @@ def weapon_payload(weapon_type_name: str, base_stats: dict, *, name: str = "") -
         "name": weapon_name,
         "type": weapon_type_name.casefold(),
         "subtype": subtype,
+        "combo_interval": combo_interval,
+        "max_combo": max_combo,
         "ammo": ammo,
         "attacks": attacks,
     }
@@ -536,7 +554,8 @@ def configured_weapon(
     if evolutions:
         context["evolutions"] = evolutions
     if combo is not None:
-        context["combo"] = 1 if use_initial_combo else max(0, min(int(combo), MAX_COMBO_MULTIPLIER))
+        _, max_combo = weapon_combo_rules(weapon)
+        context["combo"] = 1 if use_initial_combo else max(0, min(int(combo), max_combo))
     if runtime_conditions:
         context.update(runtime_conditions)
     if stance_combo:
@@ -547,7 +566,7 @@ def configured_weapon(
     if context:
         weapon.set(context)
     if use_initial_combo:
-        weapon.set({"combo": combo_multiplier_from_initial_combo(weapon.results.main.effective.initial_combo)})
+        weapon.set({"combo": combo_multiplier_from_initial_combo(weapon.results.main.effective.initial_combo, weapon)})
     return weapon
 
 
