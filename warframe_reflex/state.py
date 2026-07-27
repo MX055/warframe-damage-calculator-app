@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import copy
 import json
+import threading
+import uuid
 from typing import Any
 
 import reflex as rx
@@ -110,6 +112,8 @@ NONE = "None"
 CUSTOM = "Custom"
 RIVEN = "Riven"
 RIVEN_EMPTY_STAT = "Select stat"
+
+_OPTIMIZE_CANCEL_EVENTS: dict[str, threading.Event] = {}
 
 ALL_UPGRADE_FIELDS = tuple(dict.fromkeys((*MOD_FIELD, *ARCANE_FIELD, *BUFF_FIELD)))
 FIELD_LABEL_TO_NAME = {field_label(name): name for name in ALL_UPGRADE_FIELDS}
@@ -490,6 +494,7 @@ class CalculatorState(rx.State):
     optimize_find_evolutions: bool = False
     optimize_maximize_target: str = DEFAULT_OPTIMIZE_MAXIMIZE
     optimize_weakpoint_weight: int = 25
+    optimize_flat_dot_weight: int = 50
     optimize_maximize_options: list[str] = rx.field(default_factory=lambda: list(OPTIMIZE_MAXIMIZE_OPTIONS))
     optimize_status: str = ""
     optimize_running: bool = False
@@ -499,6 +504,7 @@ class CalculatorState(rx.State):
     optimize_phase: str = ""
     optimize_evaluations: int = 0
     optimize_revision: int = 0
+    optimize_cancel_token: str = ""
     optimize_excluded_upgrades: list[str] = rx.field(default_factory=list)
     optimize_default_exclusion_overrides: list[str] = rx.field(default_factory=list)
     optimize_upgrade_exclusion_options: list[str] = rx.field(default_factory=list)
@@ -646,6 +652,7 @@ class CalculatorState(rx.State):
         self.optimize_find_evolutions = False
         self.optimize_maximize_target = DEFAULT_OPTIMIZE_MAXIMIZE
         self.optimize_weakpoint_weight = 25
+        self.optimize_flat_dot_weight = 50
         self.optimize_excluded_upgrades = []
         self.optimize_default_exclusion_overrides = []
         self.optimize_upgrade_exclusion_options = []
@@ -1178,9 +1185,40 @@ class CalculatorState(rx.State):
         self.optimize_weakpoint_weight = max(0, min(weight, 100))
         self._invalidate_optimizer_result()
 
+    @rx.event
+    def set_optimize_flat_dot_weight(self, value: str | int | float):
+        try:
+            weight = int(float(value))
+        except (TypeError, ValueError):
+            return
+        self.optimize_flat_dot_weight = max(0, min(weight, 100))
+        self._invalidate_optimizer_result()
+
     @rx.var
     def optimize_normal_weight(self) -> int:
         return 100 - self.optimize_weakpoint_weight
+
+    @rx.var
+    def optimize_direct_weight(self) -> int:
+        return 100 - self.optimize_flat_dot_weight
+
+    @rx.event
+    def close_slot_editors(self):
+        if any(self.slot_editor_open):
+            self.slot_editor_open = [False for _ in SLOT_CONFIGS]
+
+    @rx.event
+    def abort_optimization(self):
+        if not self.optimize_running:
+            return
+        cancel_event = _OPTIMIZE_CANCEL_EVENTS.get(self.optimize_cancel_token)
+        if cancel_event is not None:
+            cancel_event.set()
+        self.optimize_revision += 1
+        self.optimize_running = False
+        self.optimize_phase = "Aborted"
+        self.optimize_status = "Optimization aborted."
+        self.optimize_cancel_token = ""
 
     @rx.event(background=True)
     async def optimize_build(self):
@@ -1191,6 +1229,7 @@ class CalculatorState(rx.State):
             if self.selected_weapon == NONE or self.selected_enemy == NONE or self.optimize_running:
                 return
             self.optimize_running = True
+            self.slot_editor_open = [False for _ in SLOT_CONFIGS]
             self.optimize_status = ""
             self.optimize_phase = "Starting…"
             self.optimize_progress = 0.0
@@ -1198,6 +1237,10 @@ class CalculatorState(rx.State):
             self.optimize_evaluations = 0
             self.optimize_best_dps = ""
             revision = self.optimize_revision
+            cancel_token = uuid.uuid4().hex
+            cancel_event = threading.Event()
+            _OPTIMIZE_CANCEL_EVENTS[cancel_token] = cancel_event
+            self.optimize_cancel_token = cancel_token
             evolutions = self._selected_evolutions()
             riven_locked = any(
                 selected == RIVEN and policy in {SLOT_POLICY_KEEP, SLOT_POLICY_KEEP_IN_SLOT}
@@ -1243,6 +1286,8 @@ class CalculatorState(rx.State):
                 find_optimal_evolutions=bool(self.optimize_find_evolutions) and bool(self.evolution_options),
                 maximize_target=OPTIMIZE_MAXIMIZE_TARGETS.get(self.optimize_maximize_target, OPTIMIZE_MAXIMIZE_TARGETS[DEFAULT_OPTIMIZE_MAXIMIZE]),
                 weakpoint_weight=self.optimize_weakpoint_weight / 100.0,
+                flat_dot_weight=self.optimize_flat_dot_weight / 100.0,
+                cancel_event=cancel_event,
                 stance_combo=self.selected_stance_combo if self.stance_combo_available else "neutral",
                 ability_strength=self._ability_strength_multiplier(),
                 excluded_upgrades=set(self.optimize_excluded_upgrades),
@@ -1318,14 +1363,24 @@ class CalculatorState(rx.State):
                         self._recalculate()
                         self.optimize_phase = "Done"
                     self.optimize_running = False
+                    _OPTIMIZE_CANCEL_EVENTS.pop(cancel_token, None)
+                    if self.optimize_cancel_token == cancel_token:
+                        self.optimize_cancel_token = ""
                 await fut
                 return
             if terminal[0] == "error":
                 exc = terminal[1]
                 async with self:
+                    _OPTIMIZE_CANCEL_EVENTS.pop(cancel_token, None)
+                    if self.optimize_cancel_token == cancel_token:
+                        self.optimize_cancel_token = ""
                     if self.optimize_revision == revision:
-                        self.optimize_status = f"{type(exc).__name__}: {exc}"
-                        self.optimize_phase = "Failed"
+                        if isinstance(exc, InterruptedError):
+                            self.optimize_status = "Optimization aborted."
+                            self.optimize_phase = "Aborted"
+                        else:
+                            self.optimize_status = f"{type(exc).__name__}: {exc}"
+                            self.optimize_phase = "Failed"
                     self.optimize_running = False
                 await fut
                 return
@@ -2260,7 +2315,6 @@ class CalculatorState(rx.State):
         self.optimize_maximize_options = options
         if self.optimize_maximize_target not in options:
             self.optimize_maximize_target = DEFAULT_OPTIMIZE_MAXIMIZE
-        self.optimize_weakpoint_weight = 25
 
     def _refresh_enemy_preview(self, enemy) -> None:
         if self.no_enemy:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import itertools
+import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Iterable
@@ -72,7 +73,7 @@ MAXIMIZE_TARGET_ATTRS = frozenset(OPTIMIZE_MAXIMIZE_TARGETS.values())
 MAXIMIZE_TARGET_LABELS = {attr: label for label, attr in OPTIMIZE_MAXIMIZE_TARGETS.items()}
 
 
-def score_maximize_target(final, maximize_target: str, weakpoint_weight: float = 0.5) -> float:
+def score_maximize_target(final, maximize_target: str, weakpoint_weight: float = 0.5, flat_dot_weight: float = 0.5) -> float:
     """Return a numeric optimizer score, including for unavailable bodypart metrics.
 
     The library represents weakpoint/resistant results as ``None`` when the
@@ -87,14 +88,34 @@ def score_maximize_target(final, maximize_target: str, weakpoint_weight: float =
         weakpoint_dph = max(float(getattr(final, "total_weakpoint_dph", 0) or 0), 0.0)
         normal_score = (normal_dps * normal_dph) ** 0.5
         weakpoint_score = (weakpoint_dps * weakpoint_dph) ** 0.5
-        weight = min(max(float(weakpoint_weight), 0.0), 1.0)
-        if weight <= 0:
-            return normal_score
-        if weight >= 1:
-            return weakpoint_score
-        if normal_score <= 0 or weakpoint_score <= 0:
+        weakpoint_weight = min(max(float(weakpoint_weight), 0.0), 1.0)
+
+        normal_dotps = max(float(getattr(final, "flat_dotps", 0) or 0), 0.0)
+        normal_dotph = max(float(getattr(final, "flat_dotph", 0) or 0), 0.0)
+        weakpoint_dotps = max(float(getattr(final, "flat_weakpoint_dotps", 0) or 0), 0.0)
+        weakpoint_dotph = max(float(getattr(final, "flat_weakpoint_dotph", 0) or 0), 0.0)
+        normal_dot_score = (normal_dotps * normal_dotph) ** 0.5
+        weakpoint_dot_score = (weakpoint_dotps * weakpoint_dotph) ** 0.5
+
+        def blend(normal: float, weakpoint: float) -> float:
+            if weakpoint_weight <= 0:
+                return normal
+            if weakpoint_weight >= 1:
+                return weakpoint
+            if normal <= 0 or weakpoint <= 0:
+                return 0.0
+            return normal ** (1.0 - weakpoint_weight) * weakpoint ** weakpoint_weight
+
+        direct_score = blend(normal_score, weakpoint_score)
+        dot_score = blend(normal_dot_score, weakpoint_dot_score)
+        flat_dot_weight = min(max(float(flat_dot_weight), 0.0), 1.0)
+        if flat_dot_weight <= 0:
+            return direct_score
+        if flat_dot_weight >= 1:
+            return dot_score
+        if direct_score <= 0 or dot_score <= 0:
             return 0.0
-        return normal_score ** (1.0 - weight) * weakpoint_score ** weight
+        return direct_score ** (1.0 - flat_dot_weight) * dot_score ** flat_dot_weight
     return float(getattr(final, maximize_target, 0) or 0)
 
 
@@ -138,6 +159,8 @@ class OptimizeRequest:
     find_optimal_evolutions: bool = False
     maximize_target: str = OPTIMIZE_MAXIMIZE_TARGETS[DEFAULT_OPTIMIZE_MAXIMIZE]
     weakpoint_weight: float = 0.5
+    flat_dot_weight: float = 0.5
+    cancel_event: threading.Event | None = None
     stance_combo: str = "neutral"
     ability_strength: float | None = None
     excluded_upgrades: set[str] = field(default_factory=set)
@@ -250,7 +273,12 @@ def optimize_build(request: OptimizeRequest, progress: ProgressCallback | None =
 
     evaluations = 0
 
+    def check_cancelled() -> None:
+        if request.cancel_event is not None and request.cancel_event.is_set():
+            raise InterruptedError("Optimization aborted")
+
     def report(phase: str, fraction: float, best: float | None = None):
+        check_cancelled()
         if progress:
             progress(phase, max(0.0, min(1.0, fraction)), evaluations, best)
 
@@ -356,6 +384,7 @@ def optimize_build(request: OptimizeRequest, progress: ProgressCallback | None =
 
     def score() -> float:
         nonlocal evaluations
+        check_cancelled()
         key = (
             tuple(names), tuple(ranks), tuple(stacks_list), tuple(rolls),
             tuple(tuple(sorted(fields.items())) for fields in riven_fields), tuple(customs),
@@ -380,7 +409,7 @@ def optimize_build(request: OptimizeRequest, progress: ProgressCallback | None =
         if request.weapon_type == "Melee" and request.combo_count == INITIAL_COMBO_RUNTIME:
             optimizer_weapon.data.runtime.combo = combo_multiplier_from_initial_combo(optimizer_weapon.results.main.effective.initial_combo, optimizer_weapon)
             optimizer_weapon.results.resolve(validate_cycles=False)
-        result = score_maximize_target(optimizer_weapon.results.main.final, maximize_target, request.weakpoint_weight)
+        result = score_maximize_target(optimizer_weapon.results.main.final, maximize_target, request.weakpoint_weight, request.flat_dot_weight)
         score_cache[key] = result
         return result
 

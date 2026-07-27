@@ -277,8 +277,8 @@ OPTIMIZER_SLOT_ORDER = (STANCE_SLOT_INDEX, *MOD_SLOT_INDICES, EXILUS_SLOT_INDEX,
 
 # Labels match result metric cards; values are AverageStats attributes or synthetic optimizer scores.
 OPTIMIZE_MAXIMIZE_TARGETS = {
-    "Total DPS": "total_dps",
     "Balanced (DPS · DPH)": "balanced_total_dps_dph",
+    "Total DPS": "total_dps",
     "Flat DPS": "flat_dps",
     "Flat DOTPS": "flat_dotps",
     "Total DPH": "total_dph",

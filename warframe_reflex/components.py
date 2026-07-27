@@ -1017,6 +1017,7 @@ def upgrade_slot(index: int) -> rx.Component:
             ),
             width="100%",
             class_name="slot-editor-shell",
+            custom_attrs={"onclick": "event.stopPropagation()"},
         ),
         class_name="slot-card",
     )
@@ -1336,20 +1337,34 @@ def optimizer_run_controls() -> rx.Component:
                         align="center",
                     ),
                     rx.el.input(
-                        type="range",
-                        min="0",
-                        max="100",
-                        step="5",
+                        type="range", min="0", max="100", step="5",
                         value=CalculatorState.optimize_weakpoint_weight,
-                        on_change=CalculatorState.set_optimize_weakpoint_weight,
-                        disabled=disabled,
-                        class_name="optimizer-balance-slider",
-                        aria_label="Weakpoint damage weight",
+                        on_change=CalculatorState.set_optimize_weakpoint_weight, disabled=disabled,
+                        class_name="optimizer-balance-slider", aria_label="Weakpoint damage weight",
                     ),
                 ),
                 rx.box(),
             ),
-            columns="repeat(2, minmax(0, 1fr))",
+            rx.cond(
+                CalculatorState.optimize_maximize_target == "Balanced (DPS · DPH)",
+                labeled_control(
+                    rx.hstack(
+                        rx.text(rx.text.strong("Direct "), CalculatorState.optimize_direct_weight, "%", class_name="optimizer-help"),
+                        rx.spacer(),
+                        rx.text(rx.text.strong("Flat DOT "), CalculatorState.optimize_flat_dot_weight, "%", class_name="optimizer-help"),
+                        width="100%",
+                        align="center",
+                    ),
+                    rx.el.input(
+                        type="range", min="0", max="100", step="5",
+                        value=CalculatorState.optimize_flat_dot_weight,
+                        on_change=CalculatorState.set_optimize_flat_dot_weight, disabled=disabled,
+                        class_name="optimizer-balance-slider", aria_label="Flat DOT damage weight",
+                    ),
+                ),
+                rx.box(),
+            ),
+            columns="repeat(3, minmax(0, 1fr))",
             class_name="optimizer-maximize-row",
             width="100%",
             gap="3",
@@ -1357,7 +1372,7 @@ def optimizer_run_controls() -> rx.Component:
         rx.cond(
             CalculatorState.optimize_maximize_target == "Balanced (DPS · DPH)",
             rx.text(
-                "Blends the balanced normal and weakpoint DPH/DPS scores. Weakpoint metrics unavailable for the selected target count as zero.",
+                "Blends normal and weakpoint damage, then balances direct damage against flat DOT. Unavailable weakpoint metrics count as zero.",
                 class_name="optimizer-help",
             ),
         ),
@@ -1401,12 +1416,16 @@ def optimizer_run_controls() -> rx.Component:
             gap="2",
             width="100%",
         ),
-        rx.button(
-            rx.cond(CalculatorState.optimize_running, "Optimizing…", "Optimize build"),
-            on_click=CalculatorState.optimize_build,
-            disabled=disabled,
-            width="100%",
-            size="3",
+        rx.hstack(
+            rx.button(
+                rx.cond(CalculatorState.optimize_running, "Optimizing…", "Optimize build"),
+                on_click=CalculatorState.optimize_build, disabled=disabled, width="100%", size="3",
+            ),
+            rx.cond(
+                CalculatorState.optimize_running,
+                rx.button("Abort", on_click=CalculatorState.abort_optimization, color_scheme="red", variant="soft", size="3", min_width="96px"),
+            ),
+            width="100%", gap="3",
         ),
         rx.cond(
             CalculatorState.optimize_running | (CalculatorState.optimize_progress > 0),
@@ -1699,6 +1718,23 @@ def results_section() -> rx.Component:
     )
 
 
+def optimization_lock_overlay() -> rx.Component:
+    return rx.cond(
+        CalculatorState.optimize_running,
+        rx.box(
+            rx.vstack(
+                rx.spinner(size="3"),
+                rx.heading("Optimizing build…", size="5"),
+                rx.text(CalculatorState.optimize_phase, class_name="optimizer-help"),
+                rx.button("Abort optimization", on_click=CalculatorState.abort_optimization, color_scheme="red", variant="soft", size="3"),
+                align="center", gap="3", class_name="optimization-lock-card",
+                custom_attrs={"onclick": "event.stopPropagation()"},
+            ),
+            class_name="optimization-lock-overlay",
+        ),
+    )
+
+
 def page() -> rx.Component:
     return rx.box(
         rx.vstack(
@@ -1714,5 +1750,7 @@ def page() -> rx.Component:
             gap="7",
             align="start",
         ),
+        optimization_lock_overlay(),
         class_name="page-shell",
+        on_click=CalculatorState.close_slot_editors,
     )
