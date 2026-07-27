@@ -62,7 +62,7 @@ MAXIMIZE_TARGET_ATTRS = frozenset(OPTIMIZE_MAXIMIZE_TARGETS.values())
 MAXIMIZE_TARGET_LABELS = {attr: label for label, attr in OPTIMIZE_MAXIMIZE_TARGETS.items()}
 
 
-def score_maximize_target(final, maximize_target: str) -> float:
+def score_maximize_target(final, maximize_target: str, weakpoint_weight: float = 0.5) -> float:
     """Return a numeric optimizer score, including for unavailable bodypart metrics.
 
     The library represents weakpoint/resistant results as ``None`` when the
@@ -71,9 +71,20 @@ def score_maximize_target(final, maximize_target: str) -> float:
     """
     pair = BALANCED_MAXIMIZE_TARGETS.get(maximize_target)
     if pair is not None:
-        left = max(float(getattr(final, pair[0], 0) or 0), 0.0)
-        right = max(float(getattr(final, pair[1], 0) or 0), 0.0)
-        return (left * right) ** 0.5
+        normal_dps = max(float(getattr(final, pair[0], 0) or 0), 0.0)
+        normal_dph = max(float(getattr(final, pair[1], 0) or 0), 0.0)
+        weakpoint_dps = max(float(getattr(final, "total_weakpoint_dps", 0) or 0), 0.0)
+        weakpoint_dph = max(float(getattr(final, "total_weakpoint_dph", 0) or 0), 0.0)
+        normal_score = (normal_dps * normal_dph) ** 0.5
+        weakpoint_score = (weakpoint_dps * weakpoint_dph) ** 0.5
+        weight = min(max(float(weakpoint_weight), 0.0), 1.0)
+        if weight <= 0:
+            return normal_score
+        if weight >= 1:
+            return weakpoint_score
+        if normal_score <= 0 or weakpoint_score <= 0:
+            return 0.0
+        return normal_score ** (1.0 - weight) * weakpoint_score ** weight
     return float(getattr(final, maximize_target, 0) or 0)
 
 
@@ -116,6 +127,7 @@ class OptimizeRequest:
     enemy_empowered: bool = False
     find_optimal_evolutions: bool = False
     maximize_target: str = OPTIMIZE_MAXIMIZE_TARGETS[DEFAULT_OPTIMIZE_MAXIMIZE]
+    weakpoint_weight: float = 0.5
     stance_combo: str = "neutral"
     ability_strength: float | None = None
     excluded_upgrades: set[str] = field(default_factory=set)
@@ -325,7 +337,7 @@ def optimize_build(request: OptimizeRequest, progress: ProgressCallback | None =
         if request.weapon_type == "Melee" and request.combo_count == INITIAL_COMBO_RUNTIME:
             optimizer_weapon.data.runtime.combo = combo_multiplier_from_initial_combo(optimizer_weapon.results.main.effective.initial_combo, optimizer_weapon)
             optimizer_weapon.results.resolve(validate_cycles=False)
-        result = score_maximize_target(optimizer_weapon.results.main.final, maximize_target)
+        result = score_maximize_target(optimizer_weapon.results.main.final, maximize_target, request.weakpoint_weight)
         score_cache[key] = result
         return result
 

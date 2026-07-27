@@ -37,7 +37,6 @@ from .constants import (
     UPGRADE_SCALAR_FIELDS,
 )
 from .data import (
-    clean_evolution_description,
     database_conditional_info,
     database_max_stacks,
     database_rank_bounds,
@@ -489,6 +488,7 @@ class CalculatorState(rx.State):
     optimize_find_riven: bool = False
     optimize_find_evolutions: bool = False
     optimize_maximize_target: str = DEFAULT_OPTIMIZE_MAXIMIZE
+    optimize_weakpoint_weight: int = 50
     optimize_maximize_options: list[str] = rx.field(default_factory=lambda: list(OPTIMIZE_MAXIMIZE_OPTIONS))
     optimize_status: str = ""
     optimize_running: bool = False
@@ -644,6 +644,7 @@ class CalculatorState(rx.State):
         self.optimize_find_riven = False
         self.optimize_find_evolutions = False
         self.optimize_maximize_target = DEFAULT_OPTIMIZE_MAXIMIZE
+        self.optimize_weakpoint_weight = 50
         self.optimize_excluded_upgrades = []
         self.optimize_default_exclusion_overrides = []
         self.optimize_upgrade_exclusion_options = []
@@ -1167,6 +1168,19 @@ class CalculatorState(rx.State):
             self.optimize_maximize_target = value
             self._invalidate_optimizer_result()
 
+    @rx.event
+    def set_optimize_weakpoint_weight(self, value: str | int | float):
+        try:
+            weight = int(float(value))
+        except (TypeError, ValueError):
+            return
+        self.optimize_weakpoint_weight = max(0, min(weight, 100))
+        self._invalidate_optimizer_result()
+
+    @rx.var
+    def optimize_normal_weight(self) -> int:
+        return 100 - self.optimize_weakpoint_weight
+
     @rx.event(background=True)
     async def optimize_build(self):
         import asyncio
@@ -1227,6 +1241,7 @@ class CalculatorState(rx.State):
                 find_optimal_riven=bool(self.optimize_find_riven) and not riven_locked and self.riven_available,
                 find_optimal_evolutions=bool(self.optimize_find_evolutions) and bool(self.evolution_options),
                 maximize_target=OPTIMIZE_MAXIMIZE_TARGETS.get(self.optimize_maximize_target, OPTIMIZE_MAXIMIZE_TARGETS[DEFAULT_OPTIMIZE_MAXIMIZE]),
+                weakpoint_weight=self.optimize_weakpoint_weight / 100.0,
                 stance_combo=self.selected_stance_combo if self.stance_combo_available else "neutral",
                 ability_strength=self._ability_strength_multiplier(),
                 excluded_upgrades=set(self.optimize_excluded_upgrades),
@@ -1636,7 +1651,7 @@ class CalculatorState(rx.State):
             for tier, perks in (metadata.get("evolutions") or {}).items():
                 options = ["None"]
                 for perk, data in perks.items():
-                    description = clean_evolution_description(perk, (data or {}).get("description", ""))
+                    description = str((data or {}).get("description", "")).strip()
                     options.append(
                         f"Perk {perk}" + (f" — {description}" if description else "")
                     )
@@ -2244,6 +2259,7 @@ class CalculatorState(rx.State):
         self.optimize_maximize_options = options
         if self.optimize_maximize_target not in options:
             self.optimize_maximize_target = DEFAULT_OPTIMIZE_MAXIMIZE
+        self.optimize_weakpoint_weight = 50
 
     def _refresh_enemy_preview(self, enemy) -> None:
         if self.no_enemy:

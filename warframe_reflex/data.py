@@ -164,28 +164,13 @@ def weapon_attack_modes(weapon_name: str | None) -> tuple[str, ...]:
     return tuple(name.replace("_", " ").title() for name in selectable)
 
 
-
-def clean_evolution_description(perk: object, description: object) -> str:
-    """Remove a redundant leading "Perk N -" label from Incarnon descriptions."""
-    text = str(description or "").strip()
-    if not text:
-        return ""
-    return re.sub(
-        rf"^\s*Perk\s+{re.escape(str(perk))}\s*(?:[-–—:]\s*)",
-        "",
-        text,
-        count=1,
-        flags=re.IGNORECASE,
-    ).strip()
-
-
 def weapon_evolution_options(weapon_name: str | None) -> list[dict]:
     evolutions = raw_weapon_metadata("", weapon_name).get("evolutions") or {}
     tiers: list[dict] = []
     for tier, perks in evolutions.items():
         options = ["None"]
         for perk, data in perks.items():
-            description = clean_evolution_description(perk, (data or {}).get("description", ""))
+            description = str((data or {}).get("description", "")).strip()
             options.append(f"Perk {perk}" + (f" — {description}" if description else ""))
         tiers.append({"tier": str(tier), "label": f"Evolution {tier}", "options": options})
     return tiers

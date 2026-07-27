@@ -584,7 +584,7 @@ def weapon_section() -> rx.Component:
             rx.vstack(
                 rx.grid(
                     select_control(
-                        "Category",
+                        "Weapon Category",
                         WEAPON_TYPE_OPTIONS,
                         CalculatorState.selected_weapon_category,
                         CalculatorState.set_weapon_type,
@@ -603,49 +603,12 @@ def weapon_section() -> rx.Component:
                     class_name="form-grid form-grid-2",
                 ),
                 rx.cond(
-                    CalculatorState.melee_weapon & (~CalculatorState.no_weapon),
-                    rx.cond(
-                        (CalculatorState.attack_mode_options.length() > 1)
-                        & CalculatorState.stance_combo_available,
-                        rx.grid(
-                            select_control(
-                                "Attack Mode",
-                                CalculatorState.attack_mode_options,
-                                CalculatorState.selected_attack_mode,
-                                CalculatorState.set_attack_mode,
-                            ),
-                            stance_combo_control(),
-                            columns=rx.breakpoints(initial="1", md="2"),
-                            gap="4",
-                            width="100%",
-                            class_name="form-grid form-grid-2",
-                        ),
-                        rx.vstack(
-                            rx.cond(
-                                CalculatorState.attack_mode_options.length() > 1,
-                                select_control(
-                                    "Attack Mode",
-                                    CalculatorState.attack_mode_options,
-                                    CalculatorState.selected_attack_mode,
-                                    CalculatorState.set_attack_mode,
-                                ),
-                            ),
-                            rx.cond(
-                                CalculatorState.stance_combo_available,
-                                stance_combo_control(),
-                            ),
-                            width="100%",
-                            gap="4",
-                        ),
-                    ),
-                    rx.cond(
-                        CalculatorState.attack_mode_options.length() > 1,
-                        select_control(
-                            "Attack Mode",
-                            CalculatorState.attack_mode_options,
-                            CalculatorState.selected_attack_mode,
-                            CalculatorState.set_attack_mode,
-                        ),
+                    CalculatorState.attack_mode_options.length() > 1,
+                    select_control(
+                        "Attack Mode",
+                        CalculatorState.attack_mode_options,
+                        CalculatorState.selected_attack_mode,
+                        CalculatorState.set_attack_mode,
                     ),
                 ),
                 rx.cond(
@@ -656,6 +619,10 @@ def weapon_section() -> rx.Component:
                         width="100%",
                         gap="1",
                     ),
+                ),
+                rx.cond(
+                    CalculatorState.stance_combo_available,
+                    stance_combo_control(),
                 ),
                 rx.cond(
                     CalculatorState.evolution_options.length() > 0,
@@ -1328,6 +1295,36 @@ def optimizer_run_controls() -> rx.Component:
             CalculatorState.optimize_maximize_target,
             CalculatorState.set_optimize_maximize_target,
             disabled=disabled,
+        ),
+        rx.cond(
+            CalculatorState.optimize_maximize_target == "Balanced (DPS · DPH)",
+            rx.vstack(
+                rx.hstack(
+                    rx.text(rx.text.strong("Normal "), CalculatorState.optimize_normal_weight, "%", class_name="optimizer-help"),
+                    rx.spacer(),
+                    rx.text(rx.text.strong("Weakpoint "), CalculatorState.optimize_weakpoint_weight, "%", class_name="optimizer-help"),
+                    width="100%",
+                    align="center",
+                ),
+                rx.input(
+                    type="range",
+                    min="0",
+                    max="100",
+                    step="5",
+                    value=CalculatorState.optimize_weakpoint_weight,
+                    on_change=CalculatorState.set_optimize_weakpoint_weight,
+                    disabled=disabled,
+                    width="100%",
+                    aria_label="Weakpoint damage weight",
+                ),
+                rx.text(
+                    "Blends the balanced normal and weakpoint DPH/DPS scores. Weakpoint metrics unavailable for the selected target count as zero.",
+                    class_name="optimizer-help",
+                ),
+                width="100%",
+                align="start",
+                gap="1",
+            ),
         ),
         rx.hstack(
             rx.checkbox(
