@@ -37,6 +37,7 @@ from .constants import (
     UPGRADE_SCALAR_FIELDS,
 )
 from .data import (
+    clean_evolution_description,
     database_conditional_info,
     database_max_stacks,
     database_rank_bounds,
@@ -488,7 +489,7 @@ class CalculatorState(rx.State):
     optimize_find_riven: bool = False
     optimize_find_evolutions: bool = False
     optimize_maximize_target: str = DEFAULT_OPTIMIZE_MAXIMIZE
-    optimize_weakpoint_weight: int = 50
+    optimize_weakpoint_weight: int = 25
     optimize_maximize_options: list[str] = rx.field(default_factory=lambda: list(OPTIMIZE_MAXIMIZE_OPTIONS))
     optimize_status: str = ""
     optimize_running: bool = False
@@ -644,7 +645,7 @@ class CalculatorState(rx.State):
         self.optimize_find_riven = False
         self.optimize_find_evolutions = False
         self.optimize_maximize_target = DEFAULT_OPTIMIZE_MAXIMIZE
-        self.optimize_weakpoint_weight = 50
+        self.optimize_weakpoint_weight = 25
         self.optimize_excluded_upgrades = []
         self.optimize_default_exclusion_overrides = []
         self.optimize_upgrade_exclusion_options = []
@@ -1651,7 +1652,7 @@ class CalculatorState(rx.State):
             for tier, perks in (metadata.get("evolutions") or {}).items():
                 options = ["None"]
                 for perk, data in perks.items():
-                    description = str((data or {}).get("description", "")).strip()
+                    description = clean_evolution_description((data or {}).get("description", ""))
                     options.append(
                         f"Perk {perk}" + (f" — {description}" if description else "")
                     )
@@ -2259,7 +2260,7 @@ class CalculatorState(rx.State):
         self.optimize_maximize_options = options
         if self.optimize_maximize_target not in options:
             self.optimize_maximize_target = DEFAULT_OPTIMIZE_MAXIMIZE
-        self.optimize_weakpoint_weight = 50
+        self.optimize_weakpoint_weight = 25
 
     def _refresh_enemy_preview(self, enemy) -> None:
         if self.no_enemy:

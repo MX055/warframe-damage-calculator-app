@@ -959,3 +959,66 @@ select.native-select option {
     grid-template-columns: minmax(0, 1fr) !important;
   }
 }
+
+/* Keep the balanced-weight control aligned with the maximize selector. */
+.optimizer-maximize-row {
+  align-items: end;
+}
+
+.optimizer-balance-slider {
+  display: block;
+  width: 100%;
+  height: 32px;
+  margin: 0;
+  padding: 0 0.5rem;
+  border: 0;
+  border-radius: var(--radius-2);
+  background: var(--color-surface);
+  box-shadow: inset 0 0 0 1px var(--gray-a7);
+  accent-color: var(--gray-9);
+  cursor: pointer;
+}
+
+.optimizer-balance-slider::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 999px;
+  background: var(--gray-a6);
+}
+
+.optimizer-balance-slider::-webkit-slider-thumb {
+  width: 14px;
+  height: 14px;
+  margin-top: -5px;
+  border: 1px solid var(--gray-a8);
+  border-radius: 50%;
+  background: var(--gray-12);
+  box-shadow: none;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.optimizer-balance-slider::-moz-range-track {
+  height: 4px;
+  border-radius: 999px;
+  background: var(--gray-a6);
+}
+
+.optimizer-balance-slider::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border: 1px solid var(--gray-a8);
+  border-radius: 50%;
+  background: var(--gray-12);
+  box-shadow: none;
+}
+
+.optimizer-balance-slider:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+@media (max-width: 700px) {
+  .optimizer-maximize-row {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+}

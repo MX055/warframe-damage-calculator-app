@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import json
+import re
 import sys
 from functools import lru_cache
 from pathlib import Path
@@ -164,13 +165,18 @@ def weapon_attack_modes(weapon_name: str | None) -> tuple[str, ...]:
     return tuple(name.replace("_", " ").title() for name in selectable)
 
 
+def clean_evolution_description(description: object) -> str:
+    text = str(description or "").strip()
+    return re.sub(r"^Perk\s+\d+\s*(?:[-—–:]\s*)+", "", text, flags=re.IGNORECASE).strip()
+
+
 def weapon_evolution_options(weapon_name: str | None) -> list[dict]:
     evolutions = raw_weapon_metadata("", weapon_name).get("evolutions") or {}
     tiers: list[dict] = []
     for tier, perks in evolutions.items():
         options = ["None"]
         for perk, data in perks.items():
-            description = str((data or {}).get("description", "")).strip()
+            description = clean_evolution_description((data or {}).get("description", ""))
             options.append(f"Perk {perk}" + (f" — {description}" if description else ""))
         tiers.append({"tier": str(tier), "label": f"Evolution {tier}", "options": options})
     return tiers
