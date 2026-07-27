@@ -174,71 +174,6 @@ def lazy_select_control(
     )
 
 
-def enemy_picker_control() -> rx.Component:
-    """Soft-styled searchable enemy picker — filters to a small option list."""
-    return labeled_control(
-        "Enemy",
-        rx.popover.root(
-            rx.popover.trigger(
-                rx.button(
-                    rx.hstack(
-                        rx.text(CalculatorState.selected_enemy, class_name="enemy-picker-value"),
-                        rx.icon("chevron-down", size=15),
-                        width="100%",
-                        align="center",
-                        justify="between",
-                        gap="2",
-                    ),
-                    type="button",
-                    variant="soft",
-                    color_scheme="gray",
-                    width="100%",
-                    height="32px",
-                    min_height="32px",
-                    class_name="full-width-select-trigger enemy-picker-trigger",
-                    custom_attrs={"data-full-width-select": "true"},
-                ),
-            ),
-            rx.popover.content(
-                rx.vstack(
-                    rx.input(
-                        value=CalculatorState.enemy_search,
-                        on_change=CalculatorState.set_enemy_search,
-                        placeholder="Search enemies…",
-                        width="100%",
-                        auto_focus=True,
-                    ),
-                    rx.box(
-                        rx.foreach(
-                            CalculatorState.enemy_picker_options,
-                            lambda name: rx.button(
-                                name,
-                                type="button",
-                                variant=rx.cond(name == CalculatorState.selected_enemy, "soft", "ghost"),
-                                color_scheme="gray",
-                                on_click=CalculatorState.set_enemy(name),
-                                width="100%",
-                                class_name="enemy-picker-option",
-                            ),
-                        ),
-                        class_name="enemy-picker-list",
-                        width="100%",
-                    ),
-                    spacing="2",
-                    width="100%",
-                ),
-                class_name="enemy-picker-content",
-                side="bottom",
-                align="start",
-                width="360px",
-                max_width="calc(100vw - 2rem)",
-            ),
-            open=CalculatorState.enemy_select_open,
-            on_open_change=CalculatorState.set_enemy_select_open,
-        ),
-    )
-
-
 def number_control(
     label: str,
     value,
@@ -741,10 +676,29 @@ def enemy_toggle_control(label: str, checked, on_change) -> rx.Component:
 
 def enemy_section() -> rx.Component:
     return rx.vstack(
-        section_title("Enemy", "Choose a database target or define a custom enemy."),
+        section_title("Enemy", "Choose a faction and target, or define a custom enemy."),
         panel(
             rx.vstack(
-                enemy_picker_control(),
+                rx.grid(
+                    select_control(
+                        "Faction",
+                        CalculatorState.enemy_faction_options,
+                        CalculatorState.selected_enemy_faction,
+                        CalculatorState.set_enemy_faction,
+                    ),
+                    lazy_select_control(
+                        "Enemy",
+                        CalculatorState.enemy_options,
+                        CalculatorState.selected_enemy,
+                        CalculatorState.set_enemy,
+                        open_var=CalculatorState.enemy_select_open,
+                        set_open=CalculatorState.set_enemy_select_open,
+                    ),
+                    columns=rx.breakpoints(initial="1", md="2"),
+                    gap="4",
+                    width="100%",
+                    class_name="form-grid form-grid-2",
+                ),
                 rx.cond(
                     CalculatorState.custom_enemy,
                     database_entry_input(

@@ -493,6 +493,29 @@ def enemy_names_for_ui() -> tuple[str, ...]:
     return tuple(sorted(raw_enemies_database(), key=str.casefold))
 
 
+@lru_cache(maxsize=1)
+def enemies_by_faction() -> dict[str, tuple[str, ...]]:
+    groups: dict[str, list[str]] = {}
+    for name, meta in raw_enemies_database().items():
+        faction = str((meta or {}).get("faction") or "Unknown")
+        groups.setdefault(faction, []).append(name)
+    return {faction: tuple(sorted(names, key=str.casefold)) for faction, names in sorted(groups.items(), key=lambda item: item[0].casefold())}
+
+
+@lru_cache(maxsize=1)
+def enemy_faction_options() -> tuple[str, ...]:
+    return tuple(enemies_by_faction())
+
+
+def enemies_for_faction(faction: str) -> tuple[str, ...]:
+    return enemies_by_faction().get(faction, ())
+
+
+def enemy_faction_for(enemy_name: str) -> str | None:
+    faction = str(raw_enemy_metadata(enemy_name).get("faction") or "")
+    return faction or None
+
+
 @lru_cache(maxsize=None)
 def _cached_database_enemy(enemy_name: str, level: int, steel_path: bool, empowered: bool):
     return arsenal.get(enemy_name, type="enemy", context={"level": level, "steel_path": steel_path, "empowered": empowered})

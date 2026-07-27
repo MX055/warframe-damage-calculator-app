@@ -41,7 +41,9 @@ from .data import (
     database_max_stacks,
     database_rank_bounds,
     database_upgrade,
-    enemy_names_for_ui,
+    enemies_for_faction,
+    enemy_faction_for,
+    enemy_faction_options,
     is_faction_damage_stat,
     optimizer_excludes_upgrade_by_default,
     raw_riven_stats_database,
@@ -354,10 +356,11 @@ class CalculatorState(rx.State):
 
     weapon_options: list[str] = rx.field(default_factory=lambda: [NONE])
     weapon_select_open: bool = False
+    selected_enemy_faction: str = ""
+    enemy_faction_options: list[str] = rx.field(default_factory=list)
     selected_enemy: str = NONE
     enemy_options: list[str] = rx.field(default_factory=lambda: [NONE, CUSTOM])
     enemy_select_open: bool = False
-    enemy_search: str = ""
     custom_enemy_entry: str = ""
     custom_enemy_placeholder: str = rx.field(default_factory=_custom_enemy_template)
     enemy_level: int = 100
@@ -532,20 +535,6 @@ class CalculatorState(rx.State):
     @rx.var
     def no_enemy(self) -> bool:
         return self.selected_enemy == NONE
-
-    @rx.var
-    def enemy_picker_options(self) -> list[str]:
-        """Filtered enemy list for the Soft picker — keep DOM small (~100 max)."""
-        options = list(self.enemy_options)
-        query = self.enemy_search.strip().casefold()
-        if query:
-            return [name for name in options if query in name.casefold()][:100]
-        priority: list[str] = []
-        for name in (NONE, CUSTOM, self.selected_enemy):
-            if name in options and name not in priority:
-                priority.append(name)
-        rest = [name for name in options if name not in priority]
-        return priority + rest[:80]
 
     @rx.var
     def show_enemy_inline_error(self) -> bool:
@@ -739,12 +728,20 @@ class CalculatorState(rx.State):
     @rx.event
     def set_enemy_select_open(self, value: bool):
         self.enemy_select_open = bool(value)
-        if value:
-            self.enemy_search = ""
 
     @rx.event
-    def set_enemy_search(self, value: str):
-        self.enemy_search = value
+    def set_enemy_faction(self, value: str):
+        if value not in self.enemy_faction_options or value == self.selected_enemy_faction:
+            return
+        self.selected_enemy_faction = value
+        self.enemy_select_open = False
+        previous = self.selected_enemy
+        self.enemy_options = [NONE, CUSTOM, *enemies_for_faction(value)]
+        if self.selected_enemy not in self.enemy_options:
+            self.selected_enemy = NONE
+        if self.selected_enemy != previous:
+            self._invalidate_optimizer_result()
+            self._recalculate()
 
     @rx.event
     def set_weapon(self, value: str):
@@ -764,7 +761,6 @@ class CalculatorState(rx.State):
     @rx.event
     def set_enemy(self, value: str):
         self.enemy_select_open = False
-        self.enemy_search = ""
         self.selected_enemy = value if value in self.enemy_options else NONE
         self._invalidate_optimizer_result()
         self._recalculate()
@@ -1548,7 +1544,15 @@ class CalculatorState(rx.State):
         self._recalculate()
 
     def _refresh_enemy_options(self):
-        self.enemy_options = [NONE, CUSTOM, *enemy_names_for_ui()]
+        factions = list(enemy_faction_options())
+        self.enemy_faction_options = factions
+        if self.selected_enemy not in (NONE, CUSTOM):
+            synced = enemy_faction_for(self.selected_enemy)
+            if synced in factions:
+                self.selected_enemy_faction = synced
+        if self.selected_enemy_faction not in factions:
+            self.selected_enemy_faction = factions[0] if factions else ""
+        self.enemy_options = [NONE, CUSTOM, *enemies_for_faction(self.selected_enemy_faction)]
         if self.selected_enemy not in self.enemy_options:
             self.selected_enemy = NONE
 

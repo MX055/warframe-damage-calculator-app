@@ -279,6 +279,7 @@ body {
 
 .plain-text-summary {
   width: 100%;
+  max-width: 100%;
   margin: 0;
   padding: 1rem;
   overflow-x: auto;
@@ -289,8 +290,7 @@ body {
   font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
   font-size: 0.9rem;
   line-height: 1.55;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
+  white-space: pre;
 }
 
 .damage-table-container table {
@@ -693,43 +693,6 @@ select.native-select:disabled {
 select.native-select option {
   background: #181b20;
   color: #fff;
-}
-
-.enemy-picker-trigger {
-  cursor: pointer;
-}
-
-.enemy-picker-trigger .enemy-picker-value {
-  display: block;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  text-align: left;
-  font-weight: 400;
-}
-
-.enemy-picker-content {
-  padding: 0.5rem !important;
-}
-
-.enemy-picker-list {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  max-height: 280px;
-  overflow-y: auto;
-  width: 100%;
-}
-
-.enemy-picker-option {
-  justify-content: flex-start !important;
-  height: auto !important;
-  min-height: 32px !important;
-  padding: 0.35rem 0.65rem !important;
-  font-weight: 400 !important;
-  white-space: normal !important;
-  text-align: left !important;
 }
 
 .incarnon-conditions-grid {
