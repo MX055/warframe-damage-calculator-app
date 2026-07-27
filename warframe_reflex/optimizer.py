@@ -39,13 +39,23 @@ RIVEN = "Riven"
 
 DAMAGE_RELATED_STATS = {
     "damage_bonus", "crit_chance", "crit_damage", "multishot", "status_chance", "status_damage",
-    "fire_rate", "attack_speed", "weakpoint_damage", "reload_speed", "magazine_capacity",
-    "ammo_efficiency", "flat_crit_chance", "multiplicative_crit_chance", "flat_crit_damage",
-    "multiplicative_base_damage", "multiplicative_fire_rate", "hunter_munitions", "internal_bleeding",
-    "primed_chamber", "vigilante_bonus", "impact", "puncture", "slash", "cold", "electricity",
-    "heat", "toxin", "blast", "corrosive", "gas", "magnetic", "radiation", "viral", "void",
-    "corpus_damage", "grineer_damage", "infested_damage", "orokin_damage", "murmur_damage",
-    "sentient_damage", "secondary_enervate", "secondary_encumber", "melee_duplicate", "melee_doughty",
+    "fire_rate", "attack_speed", "weakpoint_damage", "weakpoint_crit_chance", "reload_speed",
+    "magazine_capacity", "ammo_efficiency", "flat_crit_chance", "multiplicative_crit_chance",
+    "flat_crit_damage", "multiplicative_base_damage", "multiplicative_fire_rate", "slash_proc",
+    "random_proc", "crit_reset_charges", "duplicated_hit", "impact", "puncture", "slash", "cold",
+    "electricity", "heat", "toxin", "blast", "corrosive", "gas", "magnetic", "radiation",
+    "viral", "void", "corpus_damage", "grineer_damage", "infested_damage", "orokin_damage",
+    "murmur_damage", "sentient_damage",
+    # Legacy database aliases retained for custom and older database entries.
+    "hunter_munitions", "internal_bleeding", "primed_chamber", "vigilante_bonus",
+    "secondary_enervate", "secondary_encumber", "melee_duplicate", "melee_doughty",
+}
+
+DAMAGE_RELATED_BEHAVIORS = {
+    "WEAPON_COMBO", "FIRST_SHOT", "LAST_SHOT", "DOUBLE_FOR_BOWS", "UNIQUE_STATUS",
+    "ON_NON_CRIT", "ON_IMPACT_DOUBLE_BELOW_2_5_FR", "ON_CRIT", "ON_HIT", "ON_ANY_PROC",
+    "NEAR_YELLOW", "FROM_PUNCTURE_X_STATUS", "STACK_RESET_CRIT_2_PLUS",
+    "STATUS_EFFECT_STACKS", "STATUS_PROC_STACKS", "MULTISHOT_CONSUMES_AMMO",
 }
 CANDIDATE_SOFT_CAP = 72
 CANDIDATE_SHORTLIST_LIMIT = 24
@@ -171,8 +181,41 @@ def _empty_upgrade(kind: str) -> Upgrade:
     return Upgrade({"name": NONE, "type": kind, "stats": {}, "runtime": {"rank": 0}})
 
 
+def _upgrade_effects(name: str):
+    stats = raw_upgrade_metadata(name).get("stats") or {}
+    for stat, effects in (stats.items() if isinstance(stats, dict) else ()):
+        for effect in effects if isinstance(effects, list) else [effects]:
+            yield stat, effect
+
+
 def _has_damage_stats(name: str) -> bool:
-    return any(stat in DAMAGE_RELATED_STATS for stat in (raw_upgrade_metadata(name).get("stats") or {}))
+    for stat, effect in _upgrade_effects(name):
+        if stat in DAMAGE_RELATED_STATS:
+            return True
+        if isinstance(effect, dict) and str(effect.get("behavior") or "") in DAMAGE_RELATED_BEHAVIORS:
+            return True
+    return False
+
+
+def _matches_optimizer_stat(name: str, stat: str) -> bool:
+    for effect_stat, effect in _upgrade_effects(name):
+        if effect_stat == stat:
+            return True
+        if isinstance(effect, dict) and str(effect.get("behavior") or "") == stat:
+            return True
+    return False
+
+
+def _raw_optimizer_strength(name: str, stat: str) -> float:
+    values: list[float] = []
+    for effect_stat, effect in _upgrade_effects(name):
+        behavior = str(effect.get("behavior") or "") if isinstance(effect, dict) else ""
+        if effect_stat != stat and behavior != stat:
+            continue
+        value = effect.get("value", 0) if isinstance(effect, dict) else effect
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            values.append(abs(float(value)))
+    return max(values, default=0.0)
 
 
 def _cap_candidates(names: tuple[str, ...] | list[str]) -> list[str]:
@@ -412,16 +455,12 @@ def optimize_build(request: OptimizeRequest, progress: ProgressCallback | None =
         place(index, prev[0], policy=SLOT_POLICY_DISCARD, rank=prev[1], stacks=prev[2], fields=prev[3], roll=prev[4], custom=prev[5])
         ranked.sort(key=lambda item: (-item[0], item[1].casefold()))
         retained = [name for _dps, name in ranked[:CANDIDATE_SHORTLIST_LIMIT]]
-        for stat in DAMAGE_RELATED_STATS:
-            matching = [name for _dps, name in ranked if stat in (raw_upgrade_metadata(name).get("stats") or {})]
+        for stat in (*DAMAGE_RELATED_STATS, *DAMAGE_RELATED_BEHAVIORS):
+            matching = [name for _dps, name in ranked if _matches_optimizer_stat(name, stat)]
             for name in matching[:CANDIDATE_PER_STAT_LIMIT]:
                 if name not in retained:
                     retained.append(name)
-            def raw_strength(name: str) -> float:
-                effects = (raw_upgrade_metadata(name).get("stats") or {}).get(stat, [])
-                values = [effect.get("value", 0) if isinstance(effect, dict) else effect for effect in (effects if isinstance(effects, list) else [effects])]
-                return max((float(value) for value in values if isinstance(value, (int, float)) and not isinstance(value, bool)), default=0.0)
-            by_strength = sorted(matching, key=lambda name: (-raw_strength(name), name.casefold()))
+            by_strength = sorted(matching, key=lambda name: (-_raw_optimizer_strength(name, stat), name.casefold()))
             for name in by_strength[:CANDIDATE_RAW_STAT_LIMIT]:
                 if name not in retained:
                     retained.append(name)
