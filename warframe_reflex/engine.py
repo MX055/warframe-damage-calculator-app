@@ -365,7 +365,7 @@ def behavior_stat_label(field_name: str, behavior: str, behavior_data: Mapping[s
         return f"{base} / {per:.0%} Puncture Status Chance"
     if behavior == "STACK_RESET_CRIT_2_PLUS":
         return "Big Critical Hits Before Critical Chance Reset"
-    if behavior == "STATUS_PROC_STACKS":
+    if behavior in {"STATUS_EFFECT_STACKS", "STATUS_PROC_STACKS"}:
         status = condition_label(behavior_data.get("status", "Status"))
         return f"{base} / {status} Proc"
     if behavior == "MULTISHOT_CONSUMES_AMMO":
