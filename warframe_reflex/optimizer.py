@@ -430,11 +430,24 @@ def optimize_build(request: OptimizeRequest, progress: ProgressCallback | None =
                 retained.append(names[i])
         return retained[:CANDIDATE_SHORTLIST_HARD_CAP]
 
+    full_mod_pool = list(mod_pool)
+    full_stance_pool = list(stance_pool)
+    full_exilus_pool = list(exilus_pool)
+    full_arcane_pool = list(arcane_pool)
+
     mod_pool = shortlist(mod_pool, pool_groups[0][1])
     stance_pool = shortlist(stance_pool, pool_groups[1][1])
     exilus_pool = shortlist(exilus_pool, pool_groups[2][1])
     arcane_pool = shortlist(arcane_pool, pool_groups[3][1])
     report("Candidates ready", 0.12, baseline)
+
+    def full_pool_for(index: int) -> list[str]:
+        slot = slots[index]
+        if slot.kind == "arcane":
+            return full_arcane_pool
+        if slot.stance:
+            return full_stance_pool
+        return full_exilus_pool if slot.exilus else full_mod_pool
 
     def hill_climb(*, label: str, swap_limit: int, progress_start: float, progress_span: float) -> None:
         nonlocal baseline
@@ -488,6 +501,28 @@ def optimize_build(request: OptimizeRequest, progress: ProgressCallback | None =
                     slot_frac = (fill_i + candidate_i / pool_n) / n_open
                     report(f"{label} ({fill_i + 1}/{len(open_slots)})", progress_start + progress_span * slot_frac, best_dps)
             place(index, prev[0], policy=SLOT_POLICY_DISCARD, rank=prev[1], stacks=prev[2], fields=prev[3], roll=prev[4], custom=prev[5])
+
+            # The shortlist is ranked against the seeded build. After several unique
+            # upgrades have been selected, every remaining shortlisted candidate may
+            # be duplicated, incompatible, or no longer useful. If the slot would
+            # remain empty, scan the complete compatible pool once before giving up.
+            if best_dps <= baseline and prev[0] == NONE:
+                shortlisted = set(pool)
+                fallback_pool = [candidate for candidate in full_pool_for(index) if candidate not in shortlisted]
+                fallback_n = max(len(fallback_pool), 1)
+                for candidate_i, candidate in enumerate(fallback_pool, start=1):
+                    if not legal(candidate, index):
+                        continue
+                    max_rank, max_stacks = max_runtime(candidate, slots[index].kind)
+                    place(index, candidate, policy=SLOT_POLICY_DISCARD, rank=max_rank, stacks=max_stacks, fields={}, custom=customs[index])
+                    dps = score()
+                    if dps > best_dps:
+                        best_name, best_dps, best_rank, best_stacks = candidate, dps, max_rank, max_stacks
+                    if candidate_i == 1 or candidate_i == fallback_n or candidate_i % 24 == 0:
+                        slot_frac = (fill_i + candidate_i / fallback_n) / n_open
+                        report(f"{label} full scan ({fill_i + 1}/{len(open_slots)})", progress_start + progress_span * slot_frac, best_dps)
+                place(index, prev[0], policy=SLOT_POLICY_DISCARD, rank=prev[1], stacks=prev[2], fields=prev[3], roll=prev[4], custom=prev[5])
+
             if best_dps > baseline:
                 place(index, best_name, policy=SLOT_POLICY_DISCARD, rank=best_rank, stacks=best_stacks, fields={})
                 baseline = best_dps
