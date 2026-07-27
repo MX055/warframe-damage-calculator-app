@@ -1056,7 +1056,7 @@ input[type="range"].optimizer-balance-slider:disabled {
 
 input[type="range"].optimizer-balance-slider:disabled::-webkit-slider-runnable-track {
   border-color: var(--gray-a6) !important;
-  background: var(--gray-a3) !important;
+  background: #262a2f !important;
 }
 
 input[type="range"].optimizer-balance-slider:disabled::-webkit-slider-thumb {
@@ -1065,7 +1065,7 @@ input[type="range"].optimizer-balance-slider:disabled::-webkit-slider-thumb {
 
 input[type="range"].optimizer-balance-slider:disabled::-moz-range-track {
   border-color: var(--gray-a6) !important;
-  background: var(--gray-a3) !important;
+  background: #262a2f !important;
 }
 
 input[type="range"].optimizer-balance-slider:disabled::-moz-range-progress {
