@@ -951,10 +951,11 @@ class CalculatorState(rx.State):
         self._recalculate()
 
     @rx.event
-    def set_slot_editor_open(self, index: int, value: bool):
-        if not 0 <= index < len(SLOT_CONFIGS):
+    def toggle_slot_editor(self, index: int):
+        if not 0 <= index < len(SLOT_CONFIGS) or self.optimize_running:
             return
-        self.slot_editor_open = [bool(value) and position == index for position in range(len(SLOT_CONFIGS))]
+        should_open = not self.slot_editor_open[index]
+        self.slot_editor_open = [should_open and position == index for position in range(len(SLOT_CONFIGS))]
 
     @rx.event
     def set_clear_keep_slot(self, index: int, value: bool):

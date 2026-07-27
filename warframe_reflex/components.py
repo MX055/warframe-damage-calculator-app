@@ -964,11 +964,9 @@ def riven_slot_body(index: int) -> rx.Component:
 
 def upgrade_slot(index: int) -> rx.Component:
     config = SLOT_CONFIGS[index]
-    toggle_id = f"slot-editor-toggle-{index}"
     return panel(
         rx.box(
-            rx.el.input(type="checkbox", id=toggle_id, checked=CalculatorState.slot_editor_open[index], on_change=lambda value: CalculatorState.set_slot_editor_open(index, value), class_name="slot-editor-toggle-input"),
-            rx.el.label(
+            rx.el.button(
                 rx.vstack(
                     rx.hstack(
                         rx.vstack(
@@ -988,7 +986,9 @@ def upgrade_slot(index: int) -> rx.Component:
                     gap="3",
                     align="start",
                 ),
-                html_for=toggle_id,
+                type="button",
+                on_click=lambda: CalculatorState.toggle_slot_editor(index),
+                disabled=CalculatorState.optimize_running,
                 class_name="slot-editor-summary",
             ),
             rx.cond(
@@ -1718,22 +1718,6 @@ def results_section() -> rx.Component:
     )
 
 
-def optimization_lock_overlay() -> rx.Component:
-    return rx.cond(
-        CalculatorState.optimize_running,
-        rx.box(
-            rx.vstack(
-                rx.spinner(size="3"),
-                rx.heading("Optimizing build…", size="5"),
-                rx.text(CalculatorState.optimize_phase, class_name="optimizer-help"),
-                rx.button("Abort optimization", on_click=CalculatorState.abort_optimization, color_scheme="red", variant="soft", size="3"),
-                align="center", gap="3", class_name="optimization-lock-card",
-                custom_attrs={"onclick": "event.stopPropagation()"},
-            ),
-            class_name="optimization-lock-overlay",
-        ),
-    )
-
 
 def page() -> rx.Component:
     return rx.box(
@@ -1741,16 +1725,15 @@ def page() -> rx.Component:
             header(),
             mobile_quick_nav(),
             read_me(),
-            weapon_section(),
-            enemy_section(),
-            upgrades_section(),
+            rx.el.fieldset(weapon_section(), disabled=CalculatorState.optimize_running, class_name="optimization-disabled-section"),
+            rx.el.fieldset(enemy_section(), disabled=CalculatorState.optimize_running, class_name="optimization-disabled-section"),
+            rx.el.fieldset(upgrades_section(), disabled=CalculatorState.optimize_running, class_name="optimization-disabled-section"),
             optimizer_section(),
             results_section(),
             width="100%",
             gap="7",
             align="start",
         ),
-        optimization_lock_overlay(),
         class_name="page-shell",
         on_click=CalculatorState.close_slot_editors,
     )
