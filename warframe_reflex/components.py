@@ -584,7 +584,7 @@ def weapon_section() -> rx.Component:
             rx.vstack(
                 rx.grid(
                     select_control(
-                        "Weapon Category",
+                        "Category",
                         WEAPON_TYPE_OPTIONS,
                         CalculatorState.selected_weapon_category,
                         CalculatorState.set_weapon_type,
@@ -603,12 +603,49 @@ def weapon_section() -> rx.Component:
                     class_name="form-grid form-grid-2",
                 ),
                 rx.cond(
-                    CalculatorState.attack_mode_options.length() > 1,
-                    select_control(
-                        "Attack Mode",
-                        CalculatorState.attack_mode_options,
-                        CalculatorState.selected_attack_mode,
-                        CalculatorState.set_attack_mode,
+                    CalculatorState.melee_weapon & (~CalculatorState.no_weapon),
+                    rx.cond(
+                        (CalculatorState.attack_mode_options.length() > 1)
+                        & CalculatorState.stance_combo_available,
+                        rx.grid(
+                            select_control(
+                                "Attack Mode",
+                                CalculatorState.attack_mode_options,
+                                CalculatorState.selected_attack_mode,
+                                CalculatorState.set_attack_mode,
+                            ),
+                            stance_combo_control(),
+                            columns=rx.breakpoints(initial="1", md="2"),
+                            gap="4",
+                            width="100%",
+                            class_name="form-grid form-grid-2",
+                        ),
+                        rx.vstack(
+                            rx.cond(
+                                CalculatorState.attack_mode_options.length() > 1,
+                                select_control(
+                                    "Attack Mode",
+                                    CalculatorState.attack_mode_options,
+                                    CalculatorState.selected_attack_mode,
+                                    CalculatorState.set_attack_mode,
+                                ),
+                            ),
+                            rx.cond(
+                                CalculatorState.stance_combo_available,
+                                stance_combo_control(),
+                            ),
+                            width="100%",
+                            gap="4",
+                        ),
+                    ),
+                    rx.cond(
+                        CalculatorState.attack_mode_options.length() > 1,
+                        select_control(
+                            "Attack Mode",
+                            CalculatorState.attack_mode_options,
+                            CalculatorState.selected_attack_mode,
+                            CalculatorState.set_attack_mode,
+                        ),
                     ),
                 ),
                 rx.cond(
@@ -619,10 +656,6 @@ def weapon_section() -> rx.Component:
                         width="100%",
                         gap="1",
                     ),
-                ),
-                rx.cond(
-                    CalculatorState.stance_combo_available,
-                    stance_combo_control(),
                 ),
                 rx.cond(
                     CalculatorState.evolution_options.length() > 0,

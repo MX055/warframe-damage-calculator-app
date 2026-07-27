@@ -37,6 +37,7 @@ from .constants import (
     UPGRADE_SCALAR_FIELDS,
 )
 from .data import (
+    clean_evolution_description,
     database_conditional_info,
     database_max_stacks,
     database_rank_bounds,
@@ -1635,7 +1636,7 @@ class CalculatorState(rx.State):
             for tier, perks in (metadata.get("evolutions") or {}).items():
                 options = ["None"]
                 for perk, data in perks.items():
-                    description = str((data or {}).get("description", "")).strip()
+                    description = clean_evolution_description(perk, (data or {}).get("description", ""))
                     options.append(
                         f"Perk {perk}" + (f" — {description}" if description else "")
                     )
