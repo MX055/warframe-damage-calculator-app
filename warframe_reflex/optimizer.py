@@ -69,7 +69,7 @@ def score_maximize_target(final, maximize_target: str) -> float:
         left = max(float(getattr(final, pair[0], 0) or 0), 0.0)
         right = max(float(getattr(final, pair[1], 0) or 0), 0.0)
         return (left * right) ** 0.5
-    return float(getattr(final, maximize_target))
+    return float(getattr(final, maximize_target, 0) or 0)
 
 
 @dataclass
@@ -318,7 +318,7 @@ def optimize_build(request: OptimizeRequest, progress: ProgressCallback | None =
         optimizer_weapon.data.runtime.update(request.evolution_runtime)
         optimizer_weapon.results.resolve(validate_cycles=False)
         if request.weapon_type == "Melee" and request.combo_count == INITIAL_COMBO_RUNTIME:
-            optimizer_weapon.data.runtime.combo = combo_multiplier_from_initial_combo(optimizer_weapon.results.main.effective.initial_combo)
+            optimizer_weapon.data.runtime.combo = combo_multiplier_from_initial_combo(optimizer_weapon.results.main.effective.initial_combo, optimizer_weapon)
             optimizer_weapon.results.resolve(validate_cycles=False)
         result = score_maximize_target(optimizer_weapon.results.main.final, maximize_target)
         score_cache[key] = result

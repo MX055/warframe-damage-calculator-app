@@ -39,12 +39,17 @@ def parse_int(value: object, default: int = 0) -> int:
 def weapon_combo_rules(weapon) -> tuple[int, int]:
     """Return the weapon-specific hits-per-tier interval and maximum combo multiplier."""
     data = weapon.data
+    combo = getattr(data, "combo", None)
     combo_interval = parse_int(
-        getattr(data, "combo_interval", getattr(data, "combo_hit_interval", 20)),
+        getattr(combo, "combo_interval", None)
+        if combo is not None
+        else getattr(data, "combo_interval", getattr(data, "combo_hit_interval", 20)),
         20,
     )
     max_combo = parse_int(
-        getattr(data, "max_combo", getattr(data, "max_combo_multiplier", 12)),
+        getattr(combo, "max_combo", None)
+        if combo is not None
+        else getattr(data, "max_combo", getattr(data, "max_combo_multiplier", 12)),
         12,
     )
     return max(1, combo_interval), max(1, max_combo)
