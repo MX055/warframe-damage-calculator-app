@@ -63,7 +63,12 @@ MAXIMIZE_TARGET_LABELS = {attr: label for label, attr in OPTIMIZE_MAXIMIZE_TARGE
 
 
 def score_maximize_target(final, maximize_target: str) -> float:
-    """Score a resolved final-stats object for the selected maximize target."""
+    """Return a numeric optimizer score, including for unavailable bodypart metrics.
+
+    The library represents weakpoint/resistant results as ``None`` when the
+    selected enemy has no matching bodypart. Those values must not escape into
+    candidate comparisons such as ``dps > best_dps``.
+    """
     pair = BALANCED_MAXIMIZE_TARGETS.get(maximize_target)
     if pair is not None:
         left = max(float(getattr(final, pair[0], 0) or 0), 0.0)
