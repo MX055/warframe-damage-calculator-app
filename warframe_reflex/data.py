@@ -294,6 +294,12 @@ def stance_combo_options_for_attack(category: str) -> list[str]:
 
 def weapon_compatibility_terms(weapon_category: str, selected_weapon_name: str | None = None, *, custom_metadata: dict | None = None) -> set[str]:
     terms = set(WEAPON_COMPATIBILITY_FAMILIES[weapon_category])
+    # Bows and snipers use the ordinary rifle mod family in addition to their
+    # subtype-specific mods. Shared primary upgrades are stored with
+    # compatibility.subtypes=["rifle"], so this parent family must be present
+    # for both the UI and optimizer candidate filters.
+    if weapon_category in {"Bow", "Sniper"}:
+        terms.add("rifle")
     metadata = custom_metadata
     if metadata is None and selected_weapon_name and normalized_database_key(selected_weapon_name) not in {"custom", "none"}:
         metadata = raw_weapon_metadata(WEAPON_CATEGORY_TYPES[weapon_category], selected_weapon_name)
