@@ -1335,7 +1335,7 @@ def optimizer_run_controls() -> rx.Component:
                         width="100%",
                         align="center",
                     ),
-                    rx.input(
+                    rx.el.input(
                         type="range",
                         min="0",
                         max="100",
@@ -1343,8 +1343,6 @@ def optimizer_run_controls() -> rx.Component:
                         value=CalculatorState.optimize_weakpoint_weight,
                         on_change=CalculatorState.set_optimize_weakpoint_weight,
                         disabled=disabled,
-                        width="100%",
-                        height="32px",
                         class_name="optimizer-balance-slider",
                         aria_label="Weakpoint damage weight",
                     ),
