@@ -61,7 +61,7 @@ def request_for(case: Case, quality: str) -> OptimizeRequest:
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--quality", choices=("Fast", "Balanced", "Thorough"), default="Fast")
+    parser.add_argument("--quality", choices=("Fast", "Balanced", "Max"), default="Fast")
     parser.add_argument("--case", action="append", choices=tuple(case.label for case in CASES))
     args = parser.parse_args()
     selected = [case for case in CASES if not args.case or case.label in args.case]

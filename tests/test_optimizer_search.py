@@ -12,7 +12,7 @@ from warframe_reflex.constants import (
     OPTIMIZE_SEARCH_BALANCED,
     OPTIMIZE_SEARCH_EVALUATION_BUDGETS,
     OPTIMIZE_SEARCH_FAST,
-    OPTIMIZE_SEARCH_THOROUGH,
+    OPTIMIZE_SEARCH_MAX,
     SLOT_CONFIGS,
     SLOT_POLICY_DISCARD,
     SLOT_POLICY_KEEP_IN_SLOT,
@@ -105,7 +105,7 @@ def exact_two_slot_score(candidates, objective):
     return best
 
 
-def test_balanced_beam_escapes_two_replacement_local_optimum(fake_optimizer):
+def test_balanced_beam_escapes_two_replacement_local_optimum(fake_optimizer, monkeypatch):
     candidates = ("A", "B", "C", "D")
 
     def objective(names):
@@ -123,12 +123,13 @@ def test_balanced_beam_escapes_two_replacement_local_optimum(fake_optimizer):
     fake_optimizer(candidates, objective)
     fast = opt.optimize_build(make_request(candidates, quality=OPTIMIZE_SEARCH_FAST))
     balanced = opt.optimize_build(make_request(candidates, quality=OPTIMIZE_SEARCH_BALANCED))
-    thorough = opt.optimize_build(make_request(candidates, quality=OPTIMIZE_SEARCH_THOROUGH))
+    monkeypatch.setitem(OPTIMIZE_SEARCH_EVALUATION_BUDGETS, OPTIMIZE_SEARCH_MAX, OPTIMIZE_SEARCH_EVALUATION_BUDGETS[OPTIMIZE_SEARCH_FAST])
+    max_effort = opt.optimize_build(make_request(candidates, quality=OPTIMIZE_SEARCH_MAX))
 
-    assert fast.total_dps == 10
-    assert balanced.total_dps == exact_two_slot_score(candidates, objective) == 20
-    assert thorough.total_dps >= balanced.total_dps >= fast.total_dps
-    assert {"C", "D"} == set(balanced.slot_names[1:3])
+    assert fast.total_dps == exact_two_slot_score(candidates, objective) == 20
+    assert max_effort.total_dps >= balanced.total_dps >= fast.total_dps
+    assert max_effort.evaluations <= OPTIMIZE_SEARCH_EVALUATION_BUDGETS[OPTIMIZE_SEARCH_MAX]
+    assert {"C", "D"} == set(fast.slot_names[1:3])
 
 
 def test_optimizer_swaps_mod_order_and_can_remove_an_upgrade(fake_optimizer):
@@ -167,3 +168,27 @@ def test_optimizer_honors_pre_cancelled_request(fake_optimizer):
     cancel_event.set()
     with pytest.raises(InterruptedError):
         opt.optimize_build(make_request(("A",), cancel_event=cancel_event))
+
+
+def test_max_effort_has_a_20k_evaluation_budget():
+    assert OPTIMIZE_SEARCH_EVALUATION_BUDGETS[OPTIMIZE_SEARCH_MAX] == 20_000
+
+
+def test_dps_dph_weight_controls_the_balanced_objective():
+    final = SimpleNamespace(total_dps=100.0, total_dph=10.0, total_weakpoint_dps=0.0, total_weakpoint_dph=0.0, flat_dotps=0.0, flat_dotph=0.0, flat_weakpoint_dotps=0.0, flat_weakpoint_dotph=0.0)
+    assert opt.score_maximize_target(final, "balanced_total_dps_dph", weakpoint_weight=0, flat_dot_weight=0, dph_weight=0) == 100
+    assert opt.score_maximize_target(final, "balanced_total_dps_dph", weakpoint_weight=0, flat_dot_weight=0, dph_weight=1) == 10
+
+
+def test_optimizer_can_find_a_progenitor_element_without_changing_its_value(fake_optimizer, monkeypatch):
+    candidates = ("A",)
+    fake_optimizer(candidates, lambda names: 20 if "Progenitor heat" in names else 10 if any(name.startswith("Progenitor ") for name in names) else len(candidate_order(names, candidates)))
+    monkeypatch.setattr(opt, "progenitor_upgrade", lambda element, value, _none: FakeUpgrade(f"Progenitor {element}") if value > 0 and element != opt.NONE else FakeUpgrade(opt.NONE))
+    request = make_request(candidates, quality=OPTIMIZE_SEARCH_FAST)
+    request.progenitor_element = "cold"
+    request.progenitor_value = 0.42
+    request.find_optimal_progenitor = True
+    result = opt.optimize_build(request)
+    assert result.progenitor_optimized
+    assert result.progenitor_element == "heat"
+    assert request.progenitor_value == 0.42

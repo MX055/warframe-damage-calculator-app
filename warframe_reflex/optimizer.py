@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import itertools
 import threading
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Iterable
@@ -18,8 +19,9 @@ from .constants import (
     OPTIMIZE_SEARCH_BALANCED,
     OPTIMIZE_SEARCH_EVALUATION_BUDGETS,
     OPTIMIZE_SEARCH_FAST,
+    OPTIMIZE_SEARCH_MAX,
     OPTIMIZE_SEARCH_OPTIONS,
-    OPTIMIZE_SEARCH_THOROUGH,
+    PROGENITOR_ELEMENT_OPTIONS,
     RIVEN_NON_NEGATIVE_STATS,
     RIVEN_ROLL_CONFIGS,
     RIVEN_ROLL_OPTIONS,
@@ -71,9 +73,13 @@ CANDIDATE_PER_STAT_LIMIT = 2
 CANDIDATE_RAW_STAT_LIMIT = 2
 EVOLUTION_EXHAUSTIVE_LIMIT = 36
 EVOLUTION_DESCENT_PASSES = 2
-BALANCED_BEAM_WIDTH = 2
-THOROUGH_BEAM_WIDTH = 8
-THOROUGH_REBUILD_VARIANTS = 4
+FAST_BEAM_WIDTH = 2
+BALANCED_BEAM_WIDTH = 8
+BALANCED_REBUILD_VARIANTS = 4
+MAX_BEAM_WIDTH = 32
+MAX_REBUILD_VARIANTS = 16
+MAX_EVOLUTION_EXHAUSTIVE_LIMIT = 256
+MAX_EVOLUTION_DESCENT_PASSES = 8
 HILL_CLIMB_SWAP_LIMIT = 40  # Backward-compatible profile-script export; the optimizer now uses quality budgets.
 
 ProgressCallback = Callable[[str, float, int, float | None], None]  # phase, fraction 0-1, evaluations, best_score
@@ -81,7 +87,7 @@ MAXIMIZE_TARGET_ATTRS = frozenset(OPTIMIZE_MAXIMIZE_TARGETS.values())
 MAXIMIZE_TARGET_LABELS = {attr: label for label, attr in OPTIMIZE_MAXIMIZE_TARGETS.items()}
 
 
-def score_maximize_target(final, maximize_target: str, weakpoint_weight: float = 0.5, flat_dot_weight: float = 0.5) -> float:
+def score_maximize_target(final, maximize_target: str, weakpoint_weight: float = 0.5, flat_dot_weight: float = 0.5, dph_weight: float = 0.5) -> float:
     """Return a numeric optimizer score, including for unavailable bodypart metrics.
 
     The library represents weakpoint/resistant results as ``None`` when the
@@ -94,16 +100,27 @@ def score_maximize_target(final, maximize_target: str, weakpoint_weight: float =
         normal_dph = max(float(getattr(final, pair[1], 0) or 0), 0.0)
         weakpoint_dps = max(float(getattr(final, "total_weakpoint_dps", 0) or 0), 0.0)
         weakpoint_dph = max(float(getattr(final, "total_weakpoint_dph", 0) or 0), 0.0)
-        normal_score = (normal_dps * normal_dph) ** 0.5
-        weakpoint_score = (weakpoint_dps * weakpoint_dph) ** 0.5
+        dph_weight = min(max(float(dph_weight), 0.0), 1.0)
+
+        def blend_dps_dph(dps: float, dph: float) -> float:
+            if dph_weight <= 0:
+                return dps
+            if dph_weight >= 1:
+                return dph
+            if dps <= 0 or dph <= 0:
+                return 0.0
+            return dps ** (1.0 - dph_weight) * dph ** dph_weight
+
+        normal_score = blend_dps_dph(normal_dps, normal_dph)
+        weakpoint_score = blend_dps_dph(weakpoint_dps, weakpoint_dph)
         weakpoint_weight = min(max(float(weakpoint_weight), 0.0), 1.0)
 
         normal_dotps = max(float(getattr(final, "flat_dotps", 0) or 0), 0.0)
         normal_dotph = max(float(getattr(final, "flat_dotph", 0) or 0), 0.0)
         weakpoint_dotps = max(float(getattr(final, "flat_weakpoint_dotps", 0) or 0), 0.0)
         weakpoint_dotph = max(float(getattr(final, "flat_weakpoint_dotph", 0) or 0), 0.0)
-        normal_dot_score = (normal_dotps * normal_dotph) ** 0.5
-        weakpoint_dot_score = (weakpoint_dotps * weakpoint_dotph) ** 0.5
+        normal_dot_score = blend_dps_dph(normal_dotps, normal_dotph)
+        weakpoint_dot_score = blend_dps_dph(weakpoint_dotps, weakpoint_dotph)
 
         def blend(normal: float, weakpoint: float) -> float:
             if weakpoint_weight <= 0:
@@ -165,9 +182,11 @@ class OptimizeRequest:
     enemy_steel_path: bool = False
     enemy_empowered: bool = False
     find_optimal_evolutions: bool = False
+    find_optimal_progenitor: bool = False
     maximize_target: str = OPTIMIZE_MAXIMIZE_TARGETS[DEFAULT_OPTIMIZE_MAXIMIZE]
     weakpoint_weight: float = 0.5
     flat_dot_weight: float = 0.5
+    dph_weight: float = 0.5
     cancel_event: threading.Event | None = None
     stance_combo: str = "neutral"
     ability_strength: float | None = None
@@ -193,8 +212,11 @@ class OptimizeResult:
     message: str
     evolutions: dict[int, int] = field(default_factory=dict)
     evolutions_optimized: bool = False
+    progenitor_element: str = NO_EFFECT
+    progenitor_optimized: bool = False
     search_quality: str = DEFAULT_OPTIMIZE_SEARCH
     termination_reason: str = "local optimum"
+    elapsed_seconds: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -206,6 +228,7 @@ class _SearchState:
     riven_fields: tuple[tuple[tuple[str, float], ...], ...]
     customs: tuple[str, ...]
     evolutions: tuple[tuple[int, int], ...]
+    progenitor_element: str
 
 
 @dataclass(frozen=True)
@@ -306,11 +329,14 @@ def optimize_build(request: OptimizeRequest, progress: ProgressCallback | None =
     maximize_target = request.maximize_target
     if maximize_target not in MAXIMIZE_TARGET_ATTRS:
         raise ValueError(f"unsupported maximize target {maximize_target!r}; expected one of {sorted(MAXIMIZE_TARGET_ATTRS)}")
-    maximize_label = MAXIMIZE_TARGET_LABELS.get(maximize_target, maximize_target)
+    maximize_label = "Weighted DPS / DPH score" if maximize_target in BALANCED_MAXIMIZE_TARGETS else MAXIMIZE_TARGET_LABELS.get(maximize_target, maximize_target)
     search_quality = request.search_quality if request.search_quality in OPTIMIZE_SEARCH_OPTIONS else DEFAULT_OPTIMIZE_SEARCH
     evaluation_budget = OPTIMIZE_SEARCH_EVALUATION_BUDGETS[search_quality]
-    active_quality = OPTIMIZE_SEARCH_BALANCED if search_quality == OPTIMIZE_SEARCH_THOROUGH else search_quality
-    primary_budget = OPTIMIZE_SEARCH_EVALUATION_BUDGETS[OPTIMIZE_SEARCH_BALANCED] if search_quality == OPTIMIZE_SEARCH_THOROUGH else evaluation_budget
+    started_at = time.monotonic()
+    if search_quality in {OPTIMIZE_SEARCH_BALANCED, OPTIMIZE_SEARCH_MAX}:
+        active_quality, primary_budget = OPTIMIZE_SEARCH_FAST, OPTIMIZE_SEARCH_EVALUATION_BUDGETS[OPTIMIZE_SEARCH_FAST]
+    else:
+        active_quality, primary_budget = search_quality, evaluation_budget
 
     evaluations = 0
     budget_limited = False
@@ -361,7 +387,6 @@ def optimize_build(request: OptimizeRequest, progress: ProgressCallback | None =
     customs = [slot.custom_entry for slot in slots]
     stance_combo = request.stance_combo if request.weapon_type == "Melee" else "neutral"
 
-    progenitor = progenitor_upgrade(request.progenitor_element, request.progenitor_value, NO_EFFECT)
     external = build_upgrade("External Buffs", dict(request.external_fields))
     target = configured_enemy(request.enemy_name, custom_enemy=request.enemy_name == CUSTOM, custom_entry=request.custom_enemy_entry if request.enemy_name == CUSTOM else None, level=request.enemy_level, steel_path=request.enemy_steel_path, empowered=request.enemy_empowered)
     optimizer_weapon = configured_weapon(
@@ -381,6 +406,7 @@ def optimize_build(request: OptimizeRequest, progress: ProgressCallback | None =
     runtime_cache: dict[tuple[str, str], tuple[int, int]] = {}
     score_cache: dict[tuple, float] = {}
     current_evolutions = dict(request.evolutions or {})
+    current_progenitor_element = request.progenitor_element
     best_seen: _ScoredState | None = None
 
     def max_runtime(name: str, kind: str) -> tuple[int, int]:
@@ -432,11 +458,11 @@ def optimize_build(request: OptimizeRequest, progress: ProgressCallback | None =
         return _SearchState(
             names=tuple(names), ranks=tuple(ranks), stacks=tuple(stacks_list), rolls=tuple(rolls),
             riven_fields=tuple(tuple(sorted(fields.items())) for fields in riven_fields),
-            customs=tuple(customs), evolutions=tuple(sorted(current_evolutions.items())),
+            customs=tuple(customs), evolutions=tuple(sorted(current_evolutions.items())), progenitor_element=current_progenitor_element,
         )
 
     def restore_state(state: _SearchState) -> None:
-        nonlocal current_evolutions
+        nonlocal current_evolutions, current_progenitor_element
         names[:] = state.names
         ranks[:] = state.ranks
         stacks_list[:] = state.stacks
@@ -444,10 +470,11 @@ def optimize_build(request: OptimizeRequest, progress: ProgressCallback | None =
         riven_fields[:] = [dict(fields) for fields in state.riven_fields]
         customs[:] = state.customs
         current_evolutions = dict(state.evolutions)
+        current_progenitor_element = state.progenitor_element
 
     def fresh_score_state(state: _SearchState) -> float:
         fresh_upgrades: list[Upgrade] = []
-        fresh_progenitor = progenitor_upgrade(request.progenitor_element, request.progenitor_value, NO_EFFECT)
+        fresh_progenitor = progenitor_upgrade(state.progenitor_element, request.progenitor_value, NO_EFFECT)
         if is_non_empty_upgrade(fresh_progenitor):
             fresh_upgrades.append(fresh_progenitor)
         for index, name in enumerate(state.names):
@@ -471,7 +498,7 @@ def optimize_build(request: OptimizeRequest, progress: ProgressCallback | None =
             runtime_conditions=request.evolution_runtime, stance_combo=stance_combo if request.weapon_type == "Melee" else None,
             ability_strength=request.ability_strength, target=fresh_target,
         )
-        return score_maximize_target(fresh_weapon.results.main.final, maximize_target, request.weakpoint_weight, request.flat_dot_weight)
+        return score_maximize_target(fresh_weapon.results.main.final, maximize_target, request.weakpoint_weight, request.flat_dot_weight, request.dph_weight)
 
     def score(*, deadline: int | None = None) -> float | None:
         nonlocal evaluations, best_seen, budget_limited
@@ -486,7 +513,7 @@ def optimize_build(request: OptimizeRequest, progress: ProgressCallback | None =
                 slot_keys.append((name, 0, 0, "", (), ""))
             else:
                 slot_keys.append((name, ranks[index], stacks_list[index], "", (), ""))
-        key = (tuple(slot_keys), tuple(sorted(current_evolutions.items())))
+        key = (tuple(slot_keys), tuple(sorted(current_evolutions.items())), current_progenitor_element)
         if key in score_cache:
             return score_cache[key]
         limit = min(evaluation_budget, deadline) if deadline is not None else evaluation_budget
@@ -495,6 +522,7 @@ def optimize_build(request: OptimizeRequest, progress: ProgressCallback | None =
             return None
         evaluations += 1
         upgrades: list[Upgrade] = []
+        progenitor = progenitor_upgrade(current_progenitor_element, request.progenitor_value, NO_EFFECT)
         if is_non_empty_upgrade(progenitor):
             upgrades.append(progenitor)
         upgrades.extend(u for u in (build_slot_upgrade(i) for i in range(n)) if is_non_empty_upgrade(u))
@@ -510,7 +538,7 @@ def optimize_build(request: OptimizeRequest, progress: ProgressCallback | None =
         if request.weapon_type == "Melee" and request.combo_count == INITIAL_COMBO_RUNTIME:
             optimizer_weapon.data.runtime.combo = combo_multiplier_from_initial_combo(optimizer_weapon.results.main.effective.initial_combo, optimizer_weapon)
             optimizer_weapon.results.resolve(validate_cycles=False)
-        result = score_maximize_target(optimizer_weapon.results.main.final, maximize_target, request.weakpoint_weight, request.flat_dot_weight)
+        result = score_maximize_target(optimizer_weapon.results.main.final, maximize_target, request.weakpoint_weight, request.flat_dot_weight, request.dph_weight)
         candidate_state = capture_state()
         if best_seen is None or result > best_seen.score:
             if evaluations >= limit:
@@ -828,18 +856,20 @@ def optimize_build(request: OptimizeRequest, progress: ProgressCallback | None =
         starting_score = best_seen.score if best_seen else baseline
         remaining = deadline - evaluations
         if active_quality == OPTIMIZE_SEARCH_FAST:
-            vnd_deadline = deadline
-        elif active_quality == OPTIMIZE_SEARCH_BALANCED:
             vnd_deadline = evaluations + max(int(remaining * 0.68), 1)
-        else:
+        elif active_quality == OPTIMIZE_SEARCH_BALANCED:
             vnd_deadline = evaluations + max(int(remaining * 0.48), 1)
+        else:
+            vnd_deadline = evaluations + max(int(remaining * 0.30), 1)
         frontier, _completed = variable_neighborhood_descent(deadline=vnd_deadline, label=label)
-        if active_quality != OPTIMIZE_SEARCH_FAST and evaluations < deadline:
-            width = BALANCED_BEAM_WIDTH if active_quality == OPTIMIZE_SEARCH_BALANCED else THOROUGH_BEAM_WIDTH
-            beam_deadline = deadline if active_quality == OPTIMIZE_SEARCH_BALANCED else evaluations + max(int((deadline - evaluations) * 0.68), 1)
+        if evaluations < deadline:
+            width = FAST_BEAM_WIDTH if active_quality == OPTIMIZE_SEARCH_FAST else BALANCED_BEAM_WIDTH if active_quality == OPTIMIZE_SEARCH_BALANCED else MAX_BEAM_WIDTH
+            beam_fraction = 1.0 if active_quality == OPTIMIZE_SEARCH_FAST else 0.68 if active_quality == OPTIMIZE_SEARCH_BALANCED else 0.78
+            beam_deadline = deadline if beam_fraction >= 1 else evaluations + max(int((deadline - evaluations) * beam_fraction), 1)
             beam_escape(frontier, deadline=beam_deadline, width=width, label=f"{label}: two-move beam")
-        if active_quality == OPTIMIZE_SEARCH_THOROUGH and evaluations < deadline:
-            diversified_rebuild(frontier, deadline=deadline, variants=THOROUGH_REBUILD_VARIANTS, label=f"{label}: rebuild")
+        if active_quality in {OPTIMIZE_SEARCH_BALANCED, OPTIMIZE_SEARCH_MAX} and evaluations < deadline:
+            variants = BALANCED_REBUILD_VARIANTS if active_quality == OPTIMIZE_SEARCH_BALANCED else MAX_REBUILD_VARIANTS
+            diversified_rebuild(frontier, deadline=deadline, variants=variants, label=f"{label}: rebuild")
         if best_seen is not None:
             restore_state(best_seen.state)
             baseline = best_seen.score
@@ -867,7 +897,9 @@ def optimize_build(request: OptimizeRequest, progress: ProgressCallback | None =
         for options in perk_lists:
             total *= max(len(options), 1)
 
-        if total <= EVOLUTION_EXHAUSTIVE_LIMIT:
+        evolution_exhaustive_limit = MAX_EVOLUTION_EXHAUSTIVE_LIMIT if active_quality == OPTIMIZE_SEARCH_MAX else EVOLUTION_EXHAUSTIVE_LIMIT
+        evolution_descent_passes = MAX_EVOLUTION_DESCENT_PASSES if active_quality == OPTIMIZE_SEARCH_MAX else EVOLUTION_DESCENT_PASSES
+        if total <= evolution_exhaustive_limit:
             best_evolutions = dict(previous)
             previous_score = score(deadline=deadline)
             if previous_score is None:
@@ -898,9 +930,9 @@ def optimize_build(request: OptimizeRequest, progress: ProgressCallback | None =
         if best_dps is None:
             current_evolutions = previous
             return False
-        steps = max(sum(len(evolution_choices[tier]) for tier in tiers) * EVOLUTION_DESCENT_PASSES, 1)
+        steps = max(sum(len(evolution_choices[tier]) for tier in tiers) * evolution_descent_passes, 1)
         step_i = 0
-        for pass_i in range(EVOLUTION_DESCENT_PASSES):
+        for pass_i in range(evolution_descent_passes):
             improved = False
             for tier in tiers:
                 best_perk = current[tier]
@@ -925,15 +957,44 @@ def optimize_build(request: OptimizeRequest, progress: ProgressCallback | None =
         baseline = best_dps
         return current != previous
 
+    def search_progenitor(*, label: str, progress_start: float, progress_span: float, deadline: int) -> bool:
+        nonlocal baseline, current_progenitor_element
+        if not request.find_optimal_progenitor or evaluations >= deadline:
+            return False
+        previous = current_progenitor_element
+        best_element = previous
+        best_score = score(deadline=deadline)
+        if best_score is None:
+            return False
+        candidates = list(dict.fromkeys([previous, *PROGENITOR_ELEMENT_OPTIONS]))
+        for index, element in enumerate(candidates, start=1):
+            current_progenitor_element = element
+            candidate_score = score(deadline=deadline)
+            if candidate_score is None:
+                break
+            if candidate_score > best_score:
+                best_element, best_score = element, candidate_score
+            report(f"{label} ({index}/{len(candidates)})", progress_start + progress_span * index / max(len(candidates), 1), best_score)
+        current_progenitor_element = best_element
+        baseline = best_score
+        return best_element != previous
+
     # Seed Incarnon perks before greedy fill when requested, so mod choices see the right attack profile.
     if request.find_optimal_evolutions and evolution_choices:
         search_evolutions(label="Incarnon seed", progress_start=0.12, progress_span=0.05, deadline=primary_budget)
 
     # 3) Greedy fill supplies a fast incumbent shared by every quality profile.
     greedy_fill(label="Greedy fill", progress_start=0.17, progress_span=0.32, deadline=primary_budget, defer_trigger_limited=True)
-    optional_phases = int(bool(request.find_optimal_evolutions and evolution_choices)) + int(bool(request.find_optimal_riven))
+    optional_phases = int(bool(request.find_optimal_evolutions and evolution_choices)) + int(bool(request.find_optimal_riven)) + int(bool(request.find_optimal_progenitor))
     initial_search_deadline = primary_budget if not optional_phases else min(primary_budget, evaluations + max(int((primary_budget - evaluations) * 0.55), 1))
     run_quality_search(deadline=initial_search_deadline, label=f"{search_quality} search")
+    progenitor_note = ""
+    progenitor_optimized = False
+    if request.find_optimal_progenitor:
+        progenitor_deadline = min(primary_budget, evaluations + max(int((primary_budget - evaluations) * 0.20), 1))
+        search_progenitor(label="Progenitor element search", progress_start=0.60, progress_span=0.04, deadline=progenitor_deadline)
+        progenitor_optimized = True
+        progenitor_note = f" Best-found progenitor element: {current_progenitor_element.title()}."
 
     # 4) Revisit Incarnon perks after the first complete build, then refine mods again later.
     evolution_note = ""
@@ -1084,25 +1145,43 @@ def optimize_build(request: OptimizeRequest, progress: ProgressCallback | None =
     while evaluations < primary_budget:
         before = best_seen.score if best_seen else baseline
         evolution_changed = False
+        progenitor_changed = False
         if request.find_optimal_evolutions and evolution_choices:
             evolution_refine_deadline = min(primary_budget, evaluations + max(int((primary_budget - evaluations) * 0.25), 1))
             evolution_changed = search_evolutions(label="Final Incarnon refinement", progress_start=0.95, progress_span=0.01, deadline=evolution_refine_deadline)
+        if request.find_optimal_progenitor and evaluations < primary_budget:
+            progenitor_refine_deadline = min(primary_budget, evaluations + max(int((primary_budget - evaluations) * 0.15), 1))
+            progenitor_changed = search_progenitor(label="Final progenitor element refinement", progress_start=0.95, progress_span=0.01, deadline=progenitor_refine_deadline)
         build_changed = run_quality_search(deadline=primary_budget, label="Final refinement")
-        if not evolution_changed and not build_changed or best_seen is None or best_seen.score <= before:
+        if not evolution_changed and not progenitor_changed and not build_changed or best_seen is None or best_seen.score <= before:
             break
 
-    # Thorough is a strict continuation of the complete Balanced search. Expanding
-    # the pools only after that incumbent exists guarantees it cannot regress.
-    if search_quality == OPTIMIZE_SEARCH_THOROUGH and evaluations < evaluation_budget:
-        active_quality = OPTIMIZE_SEARCH_THOROUGH
+    # Higher tiers are strict continuations of a complete lower-pool search. Expanding
+    # the pools only after that incumbent exists guarantees they cannot regress.
+    if search_quality in {OPTIMIZE_SEARCH_BALANCED, OPTIMIZE_SEARCH_MAX} and evaluations < evaluation_budget:
+        active_quality = OPTIMIZE_SEARCH_BALANCED
         mod_pool = list(full_mod_pool)
         stance_pool = list(full_stance_pool)
         exilus_pool = list(full_exilus_pool)
         arcane_pool = list(full_arcane_pool)
-        run_quality_search(deadline=evaluation_budget, label="Thorough full-pool search")
+        balanced_deadline = evaluation_budget if search_quality == OPTIMIZE_SEARCH_BALANCED else min(OPTIMIZE_SEARCH_EVALUATION_BUDGETS[OPTIMIZE_SEARCH_BALANCED], evaluation_budget)
+        run_quality_search(deadline=balanced_deadline, label="Balanced full-pool search")
+        if request.find_optimal_evolutions and evolution_choices and evaluations < balanced_deadline:
+            search_evolutions(label="Balanced Incarnon refinement", progress_start=0.96, progress_span=0.01, deadline=balanced_deadline)
+            run_quality_search(deadline=balanced_deadline, label="Balanced final refinement")
+        if request.find_optimal_progenitor and evaluations < balanced_deadline:
+            search_progenitor(label="Balanced progenitor element refinement", progress_start=0.96, progress_span=0.01, deadline=balanced_deadline)
+            run_quality_search(deadline=balanced_deadline, label="Balanced post-progenitor refinement")
+
+    if search_quality == OPTIMIZE_SEARCH_MAX and evaluations < evaluation_budget:
+        active_quality = OPTIMIZE_SEARCH_MAX
+        run_quality_search(deadline=evaluation_budget, label="Max full-pool stress test")
         if request.find_optimal_evolutions and evolution_choices and evaluations < evaluation_budget:
-            search_evolutions(label="Thorough Incarnon refinement", progress_start=0.96, progress_span=0.01, deadline=evaluation_budget)
-            run_quality_search(deadline=evaluation_budget, label="Thorough final refinement")
+            search_evolutions(label="Max Incarnon stress test", progress_start=0.97, progress_span=0.01, deadline=evaluation_budget)
+            run_quality_search(deadline=evaluation_budget, label="Max final stress test")
+        if request.find_optimal_progenitor and evaluations < evaluation_budget:
+            search_progenitor(label="Max progenitor element refinement", progress_start=0.98, progress_span=0.01, deadline=evaluation_budget)
+            run_quality_search(deadline=evaluation_budget, label="Max post-progenitor refinement")
 
     if best_seen is None:
         raise RuntimeError("Optimizer did not produce a scored build.")
@@ -1113,12 +1192,17 @@ def optimize_build(request: OptimizeRequest, progress: ProgressCallback | None =
     filled = sum(1 for name in names if name != NONE)
     stance_name = equipped_stance_name()
     stance_note = f" Stance {stance_name}." if request.weapon_type == "Melee" and stance_name not in {NONE, CUSTOM, RIVEN} else ""
+    if progenitor_optimized:
+        progenitor_note = f" Best-found progenitor element: {current_progenitor_element.title()}."
+    elapsed_seconds = time.monotonic() - started_at
     termination_reason = "evaluation budget reached" if evaluations >= evaluation_budget or budget_limited else "local optimum reached"
+    elapsed_label = f"{int(elapsed_seconds) // 60}m {int(elapsed_seconds) % 60:02d}s" if elapsed_seconds >= 60 else f"{elapsed_seconds:.1f}s"
     return OptimizeResult(
         slot_names=names, slot_ranks=ranks, slot_stacks=stacks_list, slot_policies=policies,
         riven_rolls=rolls, riven_fields=riven_fields, custom_entries=customs,
         total_dps=final_dps, evaluations=evaluations,
-        message=f"{search_quality} search · {termination_reason} | Best found: {filled} slots | {evaluations} evaluations | {final_dps:,.1f} {maximize_label}.{riven_note}{evolution_note}{stance_note}",
+        message=f"{search_quality} search · {termination_reason} | Best found: {filled} slots | {evaluations} evaluations | {elapsed_label} | {final_dps:,.1f} {maximize_label}.{riven_note}{evolution_note}{progenitor_note}{stance_note}",
         evolutions=dict(current_evolutions), evolutions_optimized=evolutions_optimized,
-        search_quality=search_quality, termination_reason=termination_reason,
+        progenitor_element=current_progenitor_element, progenitor_optimized=progenitor_optimized,
+        search_quality=search_quality, termination_reason=termination_reason, elapsed_seconds=elapsed_seconds,
     )

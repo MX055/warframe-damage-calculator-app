@@ -7,6 +7,9 @@
   --text-muted: rgba(255, 255, 255, 0.62);
   --shadow: 0 18px 50px rgba(0, 0, 0, 0.22);
   --control-gap: 8px;
+  --locked-control-bg: #262a2f;
+  --locked-control-border: var(--gray-a6);
+  --locked-control-text: var(--gray-a10);
 }
 
 html,
@@ -705,9 +708,26 @@ select.native-select:focus {
 select.native-select:disabled {
   opacity: 1 !important;
   cursor: not-allowed;
-  background-color: var(--gray-a3) !important;
-  color: var(--gray-a10) !important;
-  box-shadow: inset 0 0 0 1px var(--gray-a6) !important;
+  background-color: var(--locked-control-bg) !important;
+  color: var(--locked-control-text) !important;
+  box-shadow: inset 0 0 0 1px var(--locked-control-border) !important;
+}
+
+:where(input:not([type="checkbox"]):not([type="radio"]):not([type="range"]), textarea, button[role="combobox"]):disabled,
+:where([role="combobox"], [role="switch"], [role="checkbox"])[data-disabled] {
+  opacity: 1 !important;
+  cursor: not-allowed !important;
+  color: var(--locked-control-text) !important;
+  background-color: var(--locked-control-bg) !important;
+  box-shadow: inset 0 0 0 1px var(--locked-control-border) !important;
+}
+
+.optimization-disabled-section:disabled :where(.enemy-toggle-control, .toggle-control) {
+  opacity: 1 !important;
+  color: var(--locked-control-text) !important;
+  background: var(--locked-control-bg) !important;
+  border-color: var(--locked-control-border) !important;
+  box-shadow: inset 0 0 0 1px var(--locked-control-border) !important;
 }
 
 select.native-select option {
@@ -1072,8 +1092,8 @@ input[type="range"].optimizer-balance-slider:disabled {
 }
 
 input[type="range"].optimizer-balance-slider:disabled::-webkit-slider-runnable-track {
-  border-color: var(--gray-a6) !important;
-  background: #262a2f !important;
+  border-color: var(--locked-control-border) !important;
+  background: var(--locked-control-bg) !important;
 }
 
 input[type="range"].optimizer-balance-slider:disabled::-webkit-slider-thumb {
@@ -1081,8 +1101,8 @@ input[type="range"].optimizer-balance-slider:disabled::-webkit-slider-thumb {
 }
 
 input[type="range"].optimizer-balance-slider:disabled::-moz-range-track {
-  border-color: var(--gray-a6) !important;
-  background: #262a2f !important;
+  border-color: var(--locked-control-border) !important;
+  background: var(--locked-control-bg) !important;
 }
 
 input[type="range"].optimizer-balance-slider:disabled::-moz-range-progress {

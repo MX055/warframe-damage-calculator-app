@@ -25,6 +25,7 @@ from .constants import (
     NO_EFFECT,
     OPTIMIZE_MAXIMIZE_OPTIONS,
     OPTIMIZE_MAXIMIZE_TARGETS,
+    OPTIMIZE_SEARCH_EVALUATION_BUDGETS,
     OPTIMIZE_SEARCH_OPTIONS,
     RIVEN_NON_NEGATIVE_STATS,
     RIVEN_ROLL_CONFIGS,
@@ -113,6 +114,33 @@ from .models import (
 NONE = "None"
 CUSTOM = "Custom"
 RIVEN = "Riven"
+
+
+def _format_elapsed(seconds: float) -> str:
+    total = max(int(seconds), 0)
+    return f"{total // 3600:02d}:{total % 3600 // 60:02d}:{total % 60:02d}"
+
+
+def _describe_optimize_phase(phase: str) -> str:
+    lowered = phase.casefold()
+    mappings = (
+        ("preparing", "Preparing weapon, enemy, and compatible upgrades"),
+        ("incarnon seed", "Testing initial Incarnon perk combinations"),
+        ("greedy fill", "Building the initial upgrade loadout"),
+        ("progenitor", "Testing progenitor elements"),
+        ("riven slot", "Testing the best Riven in every compatible slot"),
+        ("riven search", "Constructing and scoring Riven stat combinations"),
+        ("two-move beam", "Exploring coordinated two-upgrade replacements"),
+        ("rebuild", "Rebuilding from diversified candidate loadouts"),
+        ("full-pool", "Searching the full compatible upgrade pool"),
+        ("final", "Refining the best complete build"),
+        ("incarnon", "Refining Incarnon perks and the surrounding build"),
+        ("search", "Testing upgrade replacements and mod ordering"),
+        ("finishing", "Validating and preparing the best build"),
+    )
+    description = next((text for key, text in mappings if key in lowered), phase)
+    detail = phase[phase.find("("):] if "(" in phase else ""
+    return f"{description} {detail}".strip()
 RIVEN_EMPTY_STAT = "Select stat"
 
 _OPTIMIZE_CANCEL_EVENTS: dict[str, threading.Event] = {}
@@ -494,9 +522,12 @@ class CalculatorState(rx.State):
     clear_keep_buff_fields: list[str] = rx.field(default_factory=list)
     optimize_find_riven: bool = False
     optimize_find_evolutions: bool = False
+    optimize_find_progenitor: bool = False
     optimize_maximize_target: str = DEFAULT_OPTIMIZE_MAXIMIZE
     optimize_search_quality: str = DEFAULT_OPTIMIZE_SEARCH
+    optimize_dph_weight: int = 50
     optimize_weakpoint_weight: int = 25
+    optimize_weakpoint_weight_memory: int = 25
     optimize_flat_dot_weight: int = 50
     optimize_maximize_options: list[str] = rx.field(default_factory=lambda: list(OPTIMIZE_MAXIMIZE_OPTIONS))
     optimize_search_options: list[str] = rx.field(default_factory=lambda: list(OPTIMIZE_SEARCH_OPTIONS))
@@ -506,6 +537,7 @@ class CalculatorState(rx.State):
     optimize_progress: float = 0.0
     optimize_progress_width: str = "0%"
     optimize_phase: str = ""
+    optimize_elapsed: str = "00:00:00"
     optimize_evaluations: int = 0
     optimize_revision: int = 0
     optimize_cancel_token: str = ""
@@ -579,12 +611,16 @@ class CalculatorState(rx.State):
 
     @rx.var
     def riven_optimize_disabled(self) -> bool:
-        if not self.riven_available:
+        if not self.riven_optimize_available:
             return True
         return any(
             selected == RIVEN and policy in {SLOT_POLICY_KEEP, SLOT_POLICY_KEEP_IN_SLOT}
             for selected, policy in zip(self.slot_selected_upgrades, self.slot_policies)
         )
+
+    @rx.var
+    def riven_optimize_available(self) -> bool:
+        return self.riven_available and not self.ability_strength_available
 
     @rx.var
     def evolution_optimize_available(self) -> bool:
@@ -605,6 +641,10 @@ class CalculatorState(rx.State):
     @rx.var
     def supports_progenitor(self) -> bool:
         return self._supports_progenitor()
+
+    @rx.var
+    def optimize_dps_weight(self) -> int:
+        return 100 - self.optimize_dph_weight
 
     def _ability_strength_multiplier(self) -> float | None:
         if not self.ability_strength_available:
@@ -644,6 +684,7 @@ class CalculatorState(rx.State):
         self.optimize_progress = 0.0
         self.optimize_progress_width = "0%"
         self.optimize_phase = ""
+        self.optimize_elapsed = "00:00:00"
         self.optimize_evaluations = 0
 
     def _invalidate_optimizer_result(self):
@@ -654,9 +695,12 @@ class CalculatorState(rx.State):
         self._invalidate_optimizer_result()
         self.optimize_find_riven = False
         self.optimize_find_evolutions = False
+        self.optimize_find_progenitor = False
         self.optimize_maximize_target = DEFAULT_OPTIMIZE_MAXIMIZE
         self.optimize_search_quality = DEFAULT_OPTIMIZE_SEARCH
+        self.optimize_dph_weight = 50
         self.optimize_weakpoint_weight = 25
+        self.optimize_weakpoint_weight_memory = 25
         self.optimize_flat_dot_weight = 50
         self.optimize_excluded_upgrades = []
         self.optimize_default_exclusion_overrides = []
@@ -1066,6 +1110,8 @@ class CalculatorState(rx.State):
         self.slot_conditions_enabled = conditions_enabled
         if index == STANCE_SLOT_INDEX:
             self._refresh_stance_combo_options()
+        if value == RIVEN and self.slot_policies[index] in {SLOT_POLICY_KEEP, SLOT_POLICY_KEEP_IN_SLOT}:
+            self.optimize_find_riven = False
         self._refresh_slot_upgrade_options()
         self._refresh_slot_condition_metadata()
         self._refresh_slot_field_options()
@@ -1086,6 +1132,8 @@ class CalculatorState(rx.State):
         policies = list(self.slot_policies)
         policies[index] = value
         self.slot_policies = policies
+        if self.slot_selected_upgrades[index] == RIVEN and value in {SLOT_POLICY_KEEP, SLOT_POLICY_KEEP_IN_SLOT}:
+            self.optimize_find_riven = False
         self._invalidate_optimizer_result()
         selected = self.slot_selected_upgrades[index]
         if value in {SLOT_POLICY_KEEP, SLOT_POLICY_KEEP_IN_SLOT} and selected in self.optimize_excluded_upgrades:
@@ -1164,7 +1212,7 @@ class CalculatorState(rx.State):
 
     @rx.event
     def set_optimize_find_riven(self, value: bool):
-        locked = (not self.riven_available) or any(
+        locked = (not self.riven_optimize_available) or any(
             selected == RIVEN and policy in {SLOT_POLICY_KEEP, SLOT_POLICY_KEEP_IN_SLOT}
             for selected, policy in zip(self.slot_selected_upgrades, self.slot_policies)
         )
@@ -1177,10 +1225,9 @@ class CalculatorState(rx.State):
         self._invalidate_optimizer_result()
 
     @rx.event
-    def set_optimize_maximize_target(self, value: str):
-        if value in self.optimize_maximize_options:
-            self.optimize_maximize_target = value
-            self._invalidate_optimizer_result()
+    def set_optimize_find_progenitor(self, value: bool):
+        self.optimize_find_progenitor = bool(value) and self._supports_progenitor()
+        self._invalidate_optimizer_result()
 
     @rx.event
     def set_optimize_search_quality(self, value: str):
@@ -1189,12 +1236,31 @@ class CalculatorState(rx.State):
             self._invalidate_optimizer_result()
 
     @rx.event
+    def set_optimize_dph_weight(self, value: str | int | float):
+        try:
+            weight = int(float(value))
+        except (TypeError, ValueError):
+            return
+        self.optimize_dph_weight = max(0, min(weight, 100))
+        self._invalidate_optimizer_result()
+
+    @rx.event
+    def set_optimize_dps_weight(self, value: str | int | float):
+        try:
+            weight = int(float(value))
+        except (TypeError, ValueError):
+            return
+        self.optimize_dph_weight = 100 - max(0, min(weight, 100))
+        self._invalidate_optimizer_result()
+
+    @rx.event
     def set_optimize_weakpoint_weight(self, value: str | int | float):
         try:
             weight = int(float(value))
         except (TypeError, ValueError):
             return
         self.optimize_weakpoint_weight = max(0, min(weight, 100))
+        self.optimize_weakpoint_weight_memory = self.optimize_weakpoint_weight
         self._invalidate_optimizer_result()
 
     @rx.event
@@ -1240,6 +1306,7 @@ class CalculatorState(rx.State):
     async def optimize_build(self):
         import asyncio
         import queue as sync_queue
+        import time
 
         async with self:
             if self.selected_weapon == NONE or self.selected_enemy == NONE or self.optimize_running:
@@ -1247,11 +1314,12 @@ class CalculatorState(rx.State):
             self.optimize_running = True
             self.slot_editor_open = [False for _ in SLOT_CONFIGS]
             self.optimize_status = ""
-            self.optimize_phase = "Starting…"
+            self.optimize_phase = "Preparing weapon, enemy, and compatible upgrades"
             self.optimize_progress = 0.0
             self.optimize_progress_width = "0%"
             self.optimize_evaluations = 0
-            self.optimize_best_dps = ""
+            self.optimize_best_dps = "0.00"
+            self.optimize_elapsed = "00:00:00"
             revision = self.optimize_revision
             cancel_token = uuid.uuid4().hex
             cancel_event = threading.Event()
@@ -1262,6 +1330,8 @@ class CalculatorState(rx.State):
                 selected == RIVEN and policy in {SLOT_POLICY_KEEP, SLOT_POLICY_KEEP_IN_SLOT}
                 for selected, policy in zip(self.slot_selected_upgrades, self.slot_policies)
             )
+            selected_effort = self.optimize_search_quality if self.optimize_search_quality in OPTIMIZE_SEARCH_EVALUATION_BUDGETS else DEFAULT_OPTIMIZE_SEARCH
+            self.optimize_search_quality = selected_effort
             custom_weapon = self.selected_weapon == CUSTOM
             request = OptimizeRequest(
                 weapon_type=self.selected_weapon_type,
@@ -1298,12 +1368,14 @@ class CalculatorState(rx.State):
                     )
                     for index, config in enumerate(SLOT_CONFIGS)
                 ],
-                find_optimal_riven=bool(self.optimize_find_riven) and not riven_locked and self.riven_available,
+                find_optimal_riven=bool(self.optimize_find_riven) and not riven_locked and self.riven_optimize_available,
                 find_optimal_evolutions=bool(self.optimize_find_evolutions) and bool(self.evolution_options),
-                search_quality=self.optimize_search_quality,
+                find_optimal_progenitor=bool(self.optimize_find_progenitor) and self._supports_progenitor(),
+                search_quality=selected_effort,
                 maximize_target=OPTIMIZE_MAXIMIZE_TARGETS.get(self.optimize_maximize_target, OPTIMIZE_MAXIMIZE_TARGETS[DEFAULT_OPTIMIZE_MAXIMIZE]),
                 weakpoint_weight=self.optimize_weakpoint_weight / 100.0,
                 flat_dot_weight=self.optimize_flat_dot_weight / 100.0,
+                dph_weight=self.optimize_dph_weight / 100.0,
                 cancel_event=cancel_event,
                 stance_combo=self.selected_stance_combo if self.stance_combo_available else "neutral",
                 ability_strength=self._ability_strength_multiplier(),
@@ -1317,8 +1389,11 @@ class CalculatorState(rx.State):
                 riven_base_stats=self._riven_base_stats(),
                 riven_non_negative=set(RIVEN_NON_NEGATIVE_STATS),
             )
+            evaluation_budget = OPTIMIZE_SEARCH_EVALUATION_BUDGETS[request.search_quality]
 
         q: sync_queue.Queue = sync_queue.Queue()
+        started_at = time.monotonic()
+        best_value = 0.0
 
         def on_progress(phase: str, fraction: float, evaluations: int, best_dps: float | None):
             q.put(("progress", phase, fraction, evaluations, best_dps))
@@ -1348,14 +1423,18 @@ class CalculatorState(rx.State):
                     terminal = msg
             if latest_progress is not None:
                 _, phase, fraction, evaluations, best_dps = latest_progress
+                if best_dps is not None:
+                    best_value = max(best_value, float(best_dps))
                 async with self:
                     if self.optimize_revision == revision:
-                        self.optimize_phase = phase
-                        self.optimize_progress = float(fraction) * 100.0
+                        self.optimize_phase = _describe_optimize_phase(phase)
+                        self.optimize_progress = min(float(evaluations) / max(evaluation_budget, 1) * 100.0, 99.9)
                         self.optimize_progress_width = f"{self.optimize_progress:.1f}%"
                         self.optimize_evaluations = int(evaluations)
-                        if best_dps is not None:
-                            self.optimize_best_dps = f"{best_dps:,.2f}"
+                        self.optimize_best_dps = f"{best_value:,.2f}"
+            async with self:
+                if self.optimize_revision == revision and self.optimize_running:
+                    self.optimize_elapsed = _format_elapsed(time.monotonic() - started_at)
             if terminal is None:
                 continue
             if terminal[0] == "done":
@@ -1366,7 +1445,8 @@ class CalculatorState(rx.State):
                     else:
                         self._apply_optimize_result(result)
                         self.optimize_status = result.message
-                        self.optimize_best_dps = f"{result.total_dps:,.2f}"
+                        best_value = max(best_value, float(result.total_dps))
+                        self.optimize_best_dps = f"{best_value:,.2f}"
                         self.optimize_phase = "Applying build…"
                         self.optimize_progress = 100.0
                         self.optimize_progress_width = "100%"
@@ -1379,6 +1459,7 @@ class CalculatorState(rx.State):
                         self._refresh_slot_field_options()
                         self._recalculate()
                         self.optimize_phase = "Done"
+                        self.optimize_elapsed = _format_elapsed(time.monotonic() - started_at)
                     self.optimize_running = False
                     _OPTIMIZE_CANCEL_EVENTS.pop(cancel_token, None)
                     if self.optimize_cancel_token == cancel_token:
@@ -1791,6 +1872,8 @@ class CalculatorState(rx.State):
         self.slot_policies = list(result.slot_policies)
         self.slot_riven_rolls = list(result.riven_rolls)
         self.custom_upgrade_entries = list(result.custom_entries)
+        if result.progenitor_optimized:
+            self.progenitor_element = result.progenitor_element
         max_ranks, max_stacks = list(self.slot_max_ranks), list(self.slot_max_stacks)
         all_fields = copy.deepcopy(self.slot_fields)
         for index, config in enumerate(SLOT_CONFIGS):
@@ -1867,7 +1950,7 @@ class CalculatorState(rx.State):
         has_weapon = self.selected_weapon != NONE
         self._refresh_ability_strength_available(custom_metadata=custom_metadata)
         self.riven_available = has_weapon and weapon_has_riven_disposition(weapon_name, custom_metadata=custom_metadata)
-        if not self.riven_available:
+        if not self.riven_available or self.ability_strength_available:
             self.optimize_find_riven = False
         self.mod_options = [NONE, CUSTOM, *([RIVEN] if self.riven_available else []), *upgrade_names(True, False, False)]
         exclusive_stances = weapon_exclusive_stance_names(weapon_name) if self.selected_weapon_type == "Melee" and weapon_name else ()
@@ -2277,7 +2360,8 @@ class CalculatorState(rx.State):
 
     def _supports_progenitor(self) -> bool:
         if self.custom_weapon:
-            return True
+            metadata = self._custom_weapon_metadata()
+            return bool(metadata and metadata.get("progenitor", False))
         metadata = raw_weapon_metadata(
             self.selected_weapon_type,
             self.selected_weapon,
@@ -2324,14 +2408,14 @@ class CalculatorState(rx.State):
         )
 
     def _refresh_optimize_maximize_options(self):
-        options = [
-            label
-            for label, target in OPTIMIZE_MAXIMIZE_TARGETS.items()
-            if ("weakpoint" not in target or self.enemy_has_weakpoint) and ("resistant" not in target or self.enemy_has_resistant)
-        ]
-        self.optimize_maximize_options = options
-        if self.optimize_maximize_target not in options:
-            self.optimize_maximize_target = DEFAULT_OPTIMIZE_MAXIMIZE
+        self.optimize_maximize_options = [DEFAULT_OPTIMIZE_MAXIMIZE]
+        self.optimize_maximize_target = DEFAULT_OPTIMIZE_MAXIMIZE
+        if not self.enemy_has_weakpoint:
+            if self.optimize_weakpoint_weight > 0:
+                self.optimize_weakpoint_weight_memory = self.optimize_weakpoint_weight
+            self.optimize_weakpoint_weight = 0
+        elif self.optimize_weakpoint_weight == 0 and self.optimize_weakpoint_weight_memory > 0:
+            self.optimize_weakpoint_weight = self.optimize_weakpoint_weight_memory
 
     def _refresh_enemy_preview(self, enemy) -> None:
         if self.no_enemy:
@@ -2630,6 +2714,7 @@ class CalculatorState(rx.State):
                 self.selected_weapon_type,
                 None,
                 upgrades,
+                target_metric="total_weakpoint_dps" if self.enemy_has_weakpoint else "total_dps",
             )
             contribution_map = contribution_lookup_map(contribution_lookup)
 

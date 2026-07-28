@@ -617,6 +617,7 @@ def compute_contribution_proportions(
     base_stats: dict,
     upgrades: list[Upgrade],
     target: Enemy | None = None,
+    target_metric: str = "total_weakpoint_dps",
 ) -> list[tuple[Upgrade, float]]:
     if not upgrades:
         return []
@@ -625,7 +626,7 @@ def compute_contribution_proportions(
     payload = weapon_payload(weapon_type_name, base_stats)
     full_weapon = weapon_type(payload)
     full_weapon.configure(Build(*upgrades), target=target)
-    total_dps = full_weapon.results.main.final.total_dps
+    full_score = float(getattr(full_weapon.results.main.final, target_metric, 0) or 0)
     contributions: list[tuple[Upgrade, float]] = []
 
     for index, upgrade in enumerate(upgrades):
@@ -634,7 +635,7 @@ def compute_contribution_proportions(
         if remaining:
             comparison_weapon.configure(Build(*remaining), target=target)
         contributions.append(
-            (upgrade, total_dps - comparison_weapon.results.main.final.total_dps)
+            (upgrade, full_score - float(getattr(comparison_weapon.results.main.final, target_metric, 0) or 0))
         )
 
     contribution_total = sum(value for _, value in contributions) or 1.0
@@ -646,14 +647,15 @@ def contribution_lookup_for_weapon(
     weapon_type_name: str,
     base_stats: dict | None,
     upgrades: list[Upgrade],
+    target_metric: str = "total_weakpoint_dps",
 ):
-    """Prefer O(n) removal contributions for interactive UI; Shapley is too slow for live recalc."""
+    """Prefer O(n) removal contributions for the requested result metric; Shapley is too slow for live recalc."""
     if not upgrades:
         return []
 
     try:
         removal = getattr(weapon.results, "removal_contributions")
-        items = contribution_items(removal() if callable(removal) else removal)
+        items = contribution_items(removal(target=target_metric) if callable(removal) else removal)
         total = sum(value for _, value in items) or 1.0
         return [(key, value / total) for key, value in items]
     except (AttributeError, TypeError):
@@ -672,7 +674,7 @@ def contribution_lookup_for_weapon(
 
     if base_stats is None:
         return []
-    return compute_contribution_proportions(weapon_type_name, base_stats, upgrades, target=weapon.target)
+    return compute_contribution_proportions(weapon_type_name, base_stats, upgrades, target=weapon.target, target_metric=target_metric)
 
 
 def format_contribution(value: float | None) -> str:

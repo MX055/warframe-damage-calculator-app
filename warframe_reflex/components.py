@@ -1320,21 +1320,44 @@ def optimizer_run_controls() -> rx.Component:
     return rx.vstack(
         rx.grid(
             select_control(
-                "Maximize",
-                CalculatorState.optimize_maximize_options,
-                CalculatorState.optimize_maximize_target,
-                CalculatorState.set_optimize_maximize_target,
-                disabled=disabled,
-            ),
-            select_control(
-                "Search quality",
+                "Effort",
                 CalculatorState.optimize_search_options,
                 CalculatorState.optimize_search_quality,
                 CalculatorState.set_optimize_search_quality,
                 disabled=disabled,
             ),
+            labeled_control(
+                rx.hstack(
+                    rx.text(rx.text.strong("DPH "), CalculatorState.optimize_dph_weight, "%", class_name="optimizer-help"),
+                    rx.spacer(),
+                    rx.text(rx.text.strong("DPS "), CalculatorState.optimize_dps_weight, "%", class_name="optimizer-help"),
+                    width="100%",
+                    align="center",
+                ),
+                rx.el.input(
+                    type="range", min="0", max="100", step="5",
+                    value=CalculatorState.optimize_dps_weight,
+                    on_change=CalculatorState.set_optimize_dps_weight, disabled=disabled,
+                    class_name="optimizer-balance-slider", aria_label="DPS weight",
+                ),
+            ),
+            labeled_control(
+                rx.hstack(
+                    rx.text(rx.text.strong("Direct "), CalculatorState.optimize_direct_weight, "%", class_name="optimizer-help"),
+                    rx.spacer(),
+                    rx.text(rx.text.strong("DOT "), CalculatorState.optimize_flat_dot_weight, "%", class_name="optimizer-help"),
+                    width="100%",
+                    align="center",
+                ),
+                rx.el.input(
+                    type="range", min="0", max="100", step="5",
+                    value=CalculatorState.optimize_flat_dot_weight,
+                    on_change=CalculatorState.set_optimize_flat_dot_weight, disabled=disabled,
+                    class_name="optimizer-balance-slider", aria_label="Flat DOT damage weight",
+                ),
+            ),
             rx.cond(
-                CalculatorState.optimize_maximize_target == "Balanced (DPS · DPH)",
+                CalculatorState.enemy_has_weakpoint,
                 labeled_control(
                     rx.hstack(
                         rx.text(rx.text.strong("Normal "), CalculatorState.optimize_normal_weight, "%", class_name="optimizer-help"),
@@ -1350,90 +1373,85 @@ def optimizer_run_controls() -> rx.Component:
                         class_name="optimizer-balance-slider", aria_label="Weakpoint damage weight",
                     ),
                 ),
-                rx.box(),
             ),
-            rx.cond(
-                CalculatorState.optimize_maximize_target == "Balanced (DPS · DPH)",
-                labeled_control(
-                    rx.hstack(
-                        rx.text(rx.text.strong("Direct "), CalculatorState.optimize_direct_weight, "%", class_name="optimizer-help"),
-                        rx.spacer(),
-                        rx.text(rx.text.strong("DOT "), CalculatorState.optimize_flat_dot_weight, "%", class_name="optimizer-help"),
-                        width="100%",
-                        align="center",
-                    ),
-                    rx.el.input(
-                        type="range", min="0", max="100", step="5",
-                        value=CalculatorState.optimize_flat_dot_weight,
-                        on_change=CalculatorState.set_optimize_flat_dot_weight, disabled=disabled,
-                        class_name="optimizer-balance-slider", aria_label="Flat DOT damage weight",
-                    ),
-                ),
-                rx.box(),
-            ),
-            columns="repeat(4, minmax(0, 1fr))",
+            columns=rx.cond(CalculatorState.enemy_has_weakpoint, "repeat(4, minmax(0, 1fr))", "repeat(3, minmax(0, 1fr))"),
             class_name="optimizer-maximize-row",
             width="100%",
             gap="3",
         ),
         rx.text(
             rx.cond(
-                CalculatorState.optimize_search_quality == "Fast",
-                "Fast uses up to 400 evaluations (about 8 seconds).",
+                CalculatorState.optimize_search_quality == "Max",
+                "Max stress-tests every search stage with up to 20,000 evaluations.",
                 rx.cond(
-                    CalculatorState.optimize_search_quality == "Thorough",
-                    "Thorough uses up to 2,200 evaluations (about 45–60 seconds).",
-                    "Balanced uses up to 700 evaluations (about 15 seconds).",
+                    CalculatorState.optimize_search_quality == "Fast",
+                    "Fast uses up to 700 evaluations.",
+                    "Balanced uses up to 2,200 evaluations.",
                 ),
             ),
             class_name="optimizer-help",
         ),
+        rx.text("Balances DPS against DPH, normal against weakpoint damage when available, and direct damage against flat DOT.", class_name="optimizer-help"),
         rx.cond(
-            CalculatorState.optimize_maximize_target == "Balanced (DPS · DPH)",
-            rx.text(
-                "Blends normal and weakpoint damage, then balances direct damage against flat DOT. Unavailable weakpoint metrics count as zero.",
-                class_name="optimizer-help",
-            ),
-        ),
-        rx.hstack(
-            rx.checkbox(
-                checked=CalculatorState.optimize_find_riven,
-                on_change=CalculatorState.set_optimize_find_riven,
-                disabled=disabled | CalculatorState.riven_optimize_disabled,
-            ),
+            CalculatorState.riven_optimize_available,
             rx.vstack(
-                rx.text("Find optimal Riven", class_name="toggle-label"),
-                rx.text("Search allowed Riven stats after the upgrade build is optimized.", class_name="optimizer-help"),
+                rx.hstack(
+                    rx.checkbox(
+                        checked=CalculatorState.optimize_find_riven,
+                        on_change=CalculatorState.set_optimize_find_riven,
+                        disabled=disabled | CalculatorState.riven_optimize_disabled,
+                    ),
+                    rx.vstack(
+                        rx.text("Find optimal Riven", class_name="toggle-label"),
+                        rx.text("Search allowed Riven stats after the upgrade build is optimized.", class_name="optimizer-help"),
+                        align="start",
+                        gap="1",
+                    ),
+                    align="start",
+                    gap="2",
+                    width="100%",
+                ),
+                rx.cond(
+                    CalculatorState.riven_optimize_disabled,
+                    rx.text("Riven search is disabled while a Riven is marked keep or keep in slot.", class_name="optimizer-warning"),
+                ),
+                width="100%",
                 align="start",
-                gap="1",
             ),
-            align="start",
-            gap="2",
-            width="100%",
         ),
         rx.cond(
-            ~CalculatorState.riven_available,
-            rx.text("This weapon has no Riven disposition.", class_name="optimizer-warning"),
-            rx.cond(
-                CalculatorState.riven_optimize_disabled,
-                rx.text("Riven search is disabled while a Riven is marked keep or keep in slot.", class_name="optimizer-warning"),
+            CalculatorState.evolution_optimize_available,
+            rx.hstack(
+                rx.checkbox(
+                    checked=CalculatorState.optimize_find_evolutions,
+                    on_change=CalculatorState.set_optimize_find_evolutions,
+                    disabled=disabled,
+                ),
+                rx.vstack(
+                    rx.text("Find optimal Incarnon perks", class_name="toggle-label"),
+                    rx.text("Jointly optimize Incarnon perks with the mod build.", class_name="optimizer-help"),
+                    align="start",
+                    gap="1",
+                ),
+                align="start",
+                gap="2",
+                width="100%",
             ),
         ),
-        rx.hstack(
-            rx.checkbox(
-                checked=CalculatorState.optimize_find_evolutions,
-                on_change=CalculatorState.set_optimize_find_evolutions,
-                disabled=disabled | ~CalculatorState.evolution_optimize_available,
-            ),
-            rx.vstack(
-                rx.text("Find optimal Incarnon perks", class_name="toggle-label"),
-                rx.text("Jointly optimize Incarnon perks with the mod build (they depend on each other).", class_name="optimizer-help"),
+        rx.cond(
+            CalculatorState.supports_progenitor,
+            rx.hstack(
+                rx.checkbox(checked=CalculatorState.optimize_find_progenitor, on_change=CalculatorState.set_optimize_find_progenitor, disabled=disabled),
+                rx.vstack(
+                    rx.text("Find best progenitor element", class_name="toggle-label"),
+                    rx.text("Tests every progenitor element without changing the configured percentage.", class_name="optimizer-help"),
+                    align="start",
+                    gap="1",
+                ),
                 align="start",
-                gap="1",
+                gap="2",
+                width="100%",
             ),
-            align="start",
-            gap="2",
-            width="100%",
         ),
         rx.cond(
             CalculatorState.optimize_running,
@@ -1463,6 +1481,7 @@ def optimizer_run_controls() -> rx.Component:
                 rx.hstack(
                     rx.text(CalculatorState.optimize_phase, class_name="empty-text"),
                     rx.spacer(),
+                    rx.text(CalculatorState.optimize_elapsed, class_name="empty-text optimizer-elapsed"),
                     rx.text(CalculatorState.optimize_evaluations, " evaluations", class_name="empty-text"),
                     width="100%",
                 ),
@@ -1471,7 +1490,7 @@ def optimizer_run_controls() -> rx.Component:
             ),
         ),
         rx.cond(CalculatorState.optimize_status != "", rx.text(CalculatorState.optimize_status, class_name="empty-text")),
-        rx.cond(CalculatorState.optimize_best_dps != "", rx.text("Best ", CalculatorState.optimize_maximize_target, ": ", CalculatorState.optimize_best_dps, class_name="preview-value")),
+        rx.cond(CalculatorState.optimize_best_dps != "", rx.text("Best score: ", CalculatorState.optimize_best_dps, class_name="preview-value")),
         width="100%",
         gap="3",
         align="start",
