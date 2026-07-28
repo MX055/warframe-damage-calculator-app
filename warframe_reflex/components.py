@@ -1391,7 +1391,7 @@ def optimizer_run_controls() -> rx.Component:
             ),
             class_name="optimizer-help",
         ),
-        rx.text("Balances DPS against DPH, normal against weakpoint damage when available, and direct damage against flat DOT.", class_name="optimizer-help"),
+        # rx.text("Balances DPS against DPH, normal against weakpoint damage when available, and direct damage against flat DOT.", class_name="optimizer-help"),
         rx.cond(
             CalculatorState.riven_optimize_available,
             rx.vstack(
