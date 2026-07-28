@@ -4,7 +4,6 @@ import time
 from warframe_reflex.constants import SLOT_CONFIGS, SLOT_POLICY_DISCARD
 from warframe_reflex.data import upgrade_names_for_ui, database_upgrade, raw_upgrade_metadata
 from warframe_reflex.engine import configured_weapon
-from warframe_reflex import optimizer as opt
 from warframe_reflex.optimizer import (
     OptimizeRequest, SlotSpec, _cap_candidates, optimize_build, _db_upgrade, _max_runtime,
 )
@@ -78,11 +77,9 @@ def main():
     print(f"  skip hill: save ~200*{ms_eval/1000:.2f}s = {200*ms_eval/1000:.1f}s")
     print(f"  cache identical frozensets: greedy revisits rare but hill swaps re-eval many near-duplicates")
 
-    # Quick: time only greedy by setting HILL_CLIMB_SWAP_LIMIT=0
-    old = opt.HILL_CLIMB_SWAP_LIMIT
-    opt.HILL_CLIMB_SWAP_LIMIT = 0
+    # Quick: time the bounded Fast search profile.
     slots = [SlotSpec(index=i, kind=c["kind"], exilus=c["exilus"], selected="None", policy=SLOT_POLICY_DISCARD, rank=0, stacks=0, condition=True) for i, c in enumerate(SLOT_CONFIGS)]
-    req = OptimizeRequest(weapon_type=WEAPON_TYPE, weapon_category=WEAPON_CATEGORY, weapon_name=WEAPON_NAME, custom_weapon=False, custom_weapon_entry="", attack_mode="", evolutions={}, progenitor_element="None", progenitor_value=0.0, external_fields={}, slots=slots, find_optimal_riven=False)
+    req = OptimizeRequest(weapon_type=WEAPON_TYPE, weapon_category=WEAPON_CATEGORY, weapon_name=WEAPON_NAME, custom_weapon=False, custom_weapon_entry="", attack_mode="", evolutions={}, combo_count=1, evolution_runtime={}, progenitor_element="None", progenitor_value=0.0, external_fields={}, slots=slots, find_optimal_riven=False, search_quality="Fast")
     marks = []
     def progress(phase, frac, evals, best):
         marks.append((phase, frac, evals, best, time.perf_counter()))
@@ -90,8 +87,7 @@ def main():
     marks.append(("start", 0, 0, None, t0))
     res = optimize_build(req, progress=progress)
     dt = time.perf_counter() - t0
-    opt.HILL_CLIMB_SWAP_LIMIT = old
-    print(f"\noptimize greedy-only (HILL=0): {dt:.2f}s  evals={res.evaluations}  dps={res.total_dps:,.1f}")
+    print(f"\noptimize Fast profile: {dt:.2f}s  evals={res.evaluations}  dps={res.total_dps:,.1f}")
     print(f"  ms/eval={dt*1000/max(res.evaluations,1):.1f}")
     print(f"  message={res.message}")
     for row in marks:

@@ -13,3 +13,8 @@ package = false
 
 [tool.setuptools.packages.find]
 include = ["warframe_reflex*"]
+
+[tool.pytest.ini_options]
+markers = [
+    "slow: integration and performance regressions that run the real damage engine",
+]

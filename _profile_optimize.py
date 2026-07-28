@@ -86,6 +86,7 @@ def main():
     req = OptimizeRequest(
         weapon_type=WEAPON_TYPE, weapon_category=WEAPON_CATEGORY, weapon_name=WEAPON_NAME,
         custom_weapon=False, custom_weapon_entry="", attack_mode=ATTACK_MODE, evolutions={},
+        combo_count=1, evolution_runtime={},
         progenitor_element="None", progenitor_value=0.0, external_fields={},
         slots=slots, find_optimal_riven=False,
     )

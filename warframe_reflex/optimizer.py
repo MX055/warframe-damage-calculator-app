@@ -11,9 +11,15 @@ from warframe_damage_calculator import Build, Upgrade
 from .constants import (
     BALANCED_MAXIMIZE_TARGETS,
     DEFAULT_OPTIMIZE_MAXIMIZE,
+    DEFAULT_OPTIMIZE_SEARCH,
     INITIAL_COMBO_RUNTIME,
     NO_EFFECT,
     OPTIMIZE_MAXIMIZE_TARGETS,
+    OPTIMIZE_SEARCH_BALANCED,
+    OPTIMIZE_SEARCH_EVALUATION_BUDGETS,
+    OPTIMIZE_SEARCH_FAST,
+    OPTIMIZE_SEARCH_OPTIONS,
+    OPTIMIZE_SEARCH_THOROUGH,
     RIVEN_NON_NEGATIVE_STATS,
     RIVEN_ROLL_CONFIGS,
     RIVEN_ROLL_OPTIONS,
@@ -63,10 +69,12 @@ CANDIDATE_SHORTLIST_LIMIT = 24
 CANDIDATE_SHORTLIST_HARD_CAP = 36
 CANDIDATE_PER_STAT_LIMIT = 2
 CANDIDATE_RAW_STAT_LIMIT = 2
-HILL_CLIMB_SWAP_LIMIT = 40
-EVOLUTION_REFINE_HILL_LIMIT = 20
 EVOLUTION_EXHAUSTIVE_LIMIT = 36
 EVOLUTION_DESCENT_PASSES = 2
+BALANCED_BEAM_WIDTH = 2
+THOROUGH_BEAM_WIDTH = 8
+THOROUGH_REBUILD_VARIANTS = 4
+HILL_CLIMB_SWAP_LIMIT = 40  # Backward-compatible profile-script export; the optimizer now uses quality budgets.
 
 ProgressCallback = Callable[[str, float, int, float | None], None]  # phase, fraction 0-1, evaluations, best_score
 MAXIMIZE_TARGET_ATTRS = frozenset(OPTIMIZE_MAXIMIZE_TARGETS.values())
@@ -168,6 +176,7 @@ class OptimizeRequest:
     riven_disposition: float = 1.0
     riven_base_stats: dict[str, float] = field(default_factory=dict)
     riven_non_negative: set[str] = field(default_factory=lambda: set(RIVEN_NON_NEGATIVE_STATS))
+    search_quality: str = DEFAULT_OPTIMIZE_SEARCH
 
 
 @dataclass
@@ -184,6 +193,26 @@ class OptimizeResult:
     message: str
     evolutions: dict[int, int] = field(default_factory=dict)
     evolutions_optimized: bool = False
+    search_quality: str = DEFAULT_OPTIMIZE_SEARCH
+    termination_reason: str = "local optimum"
+
+
+@dataclass(frozen=True)
+class _SearchState:
+    names: tuple[str, ...]
+    ranks: tuple[int, ...]
+    stacks: tuple[int, ...]
+    rolls: tuple[str, ...]
+    riven_fields: tuple[tuple[tuple[str, float], ...], ...]
+    customs: tuple[str, ...]
+    evolutions: tuple[tuple[int, int], ...]
+
+
+@dataclass(frozen=True)
+class _ScoredState:
+    score: float
+    state: _SearchState
+    changed_slot: int = -1
 
 
 def riven_field_limits(base_stats: dict[str, float], disposition: float, roll_name: str, field_name: str, negative: bool, non_negative: Iterable[str]) -> tuple[float, float] | None:
@@ -218,6 +247,14 @@ def _has_damage_stats(name: str) -> bool:
         if isinstance(effect, dict) and str(effect.get("behavior") or "") in DAMAGE_RELATED_BEHAVIORS:
             return True
     return False
+
+
+def _has_special_optimizer_behavior(name: str) -> bool:
+    return any(isinstance(effect, dict) and str(effect.get("behavior") or "") in DAMAGE_RELATED_BEHAVIORS for _stat, effect in _upgrade_effects(name))
+
+
+def _has_trigger_compatibility(name: str) -> bool:
+    return bool((raw_upgrade_metadata(name).get("compatibility") or {}).get("triggers"))
 
 
 def _matches_optimizer_stat(name: str, stat: str) -> bool:
@@ -270,8 +307,13 @@ def optimize_build(request: OptimizeRequest, progress: ProgressCallback | None =
     if maximize_target not in MAXIMIZE_TARGET_ATTRS:
         raise ValueError(f"unsupported maximize target {maximize_target!r}; expected one of {sorted(MAXIMIZE_TARGET_ATTRS)}")
     maximize_label = MAXIMIZE_TARGET_LABELS.get(maximize_target, maximize_target)
+    search_quality = request.search_quality if request.search_quality in OPTIMIZE_SEARCH_OPTIONS else DEFAULT_OPTIMIZE_SEARCH
+    evaluation_budget = OPTIMIZE_SEARCH_EVALUATION_BUDGETS[search_quality]
+    active_quality = OPTIMIZE_SEARCH_BALANCED if search_quality == OPTIMIZE_SEARCH_THOROUGH else search_quality
+    primary_budget = OPTIMIZE_SEARCH_EVALUATION_BUDGETS[OPTIMIZE_SEARCH_BALANCED] if search_quality == OPTIMIZE_SEARCH_THOROUGH else evaluation_budget
 
     evaluations = 0
+    budget_limited = False
 
     def check_cancelled() -> None:
         if request.cancel_event is not None and request.cancel_event.is_set():
@@ -298,13 +340,16 @@ def optimize_build(request: OptimizeRequest, progress: ProgressCallback | None =
             names = _upgrade_names_for_ui(request.weapon_category, weapon_filter_name, request.attack_mode, include_mods, include_arcanes, exilus_only, stance_only=stance_only, custom_metadata=custom_metadata)
         else:
             names = upgrade_names_for_ui(request.weapon_category, weapon_filter_name, request.attack_mode, include_mods, include_arcanes, exilus_only, stance_only)
-        capped = list(names) if stance_only else _cap_candidates(names)
-        return [name for name in capped if name not in excluded_upgrades]
+        return [name for name in names if name not in excluded_upgrades]
 
-    mod_pool = upgrade_pool(True, False, False)
-    stance_pool = upgrade_pool(True, False, False, stance_only=True) if request.weapon_type == "Melee" else []
-    exilus_pool = upgrade_pool(True, False, True)
-    arcane_pool = upgrade_pool(False, True, False)
+    full_mod_pool = upgrade_pool(True, False, False)
+    full_stance_pool = upgrade_pool(True, False, False, stance_only=True) if request.weapon_type == "Melee" else []
+    full_exilus_pool = upgrade_pool(True, False, True)
+    full_arcane_pool = upgrade_pool(False, True, False)
+    mod_pool = _cap_candidates(full_mod_pool)
+    stance_pool = list(full_stance_pool)
+    exilus_pool = _cap_candidates(full_exilus_pool)
+    arcane_pool = _cap_candidates(full_arcane_pool)
 
     n = len(slots)
     names = [NONE for _ in range(n)]
@@ -336,6 +381,7 @@ def optimize_build(request: OptimizeRequest, progress: ProgressCallback | None =
     runtime_cache: dict[tuple[str, str], tuple[int, int]] = {}
     score_cache: dict[tuple, float] = {}
     current_evolutions = dict(request.evolutions or {})
+    best_seen: _ScoredState | None = None
 
     def max_runtime(name: str, kind: str) -> tuple[int, int]:
         key = name, kind
@@ -382,16 +428,71 @@ def optimize_build(request: OptimizeRequest, progress: ProgressCallback | None =
                 return names[index]
         return NONE
 
-    def score() -> float:
-        nonlocal evaluations
-        check_cancelled()
-        key = (
-            tuple(names), tuple(ranks), tuple(stacks_list), tuple(rolls),
-            tuple(tuple(sorted(fields.items())) for fields in riven_fields), tuple(customs),
-            tuple(sorted(current_evolutions.items())),
+    def capture_state() -> _SearchState:
+        return _SearchState(
+            names=tuple(names), ranks=tuple(ranks), stacks=tuple(stacks_list), rolls=tuple(rolls),
+            riven_fields=tuple(tuple(sorted(fields.items())) for fields in riven_fields),
+            customs=tuple(customs), evolutions=tuple(sorted(current_evolutions.items())),
         )
+
+    def restore_state(state: _SearchState) -> None:
+        nonlocal current_evolutions
+        names[:] = state.names
+        ranks[:] = state.ranks
+        stacks_list[:] = state.stacks
+        rolls[:] = state.rolls
+        riven_fields[:] = [dict(fields) for fields in state.riven_fields]
+        customs[:] = state.customs
+        current_evolutions = dict(state.evolutions)
+
+    def fresh_score_state(state: _SearchState) -> float:
+        fresh_upgrades: list[Upgrade] = []
+        fresh_progenitor = progenitor_upgrade(request.progenitor_element, request.progenitor_value, NO_EFFECT)
+        if is_non_empty_upgrade(fresh_progenitor):
+            fresh_upgrades.append(fresh_progenitor)
+        for index, name in enumerate(state.names):
+            slot = slots[index]
+            if name == NONE:
+                continue
+            if name == CUSTOM:
+                fresh_upgrades.append(custom_upgrade_from_entry(state.customs[index] or f'{{"name":"Custom","type":"{slot.kind}","stats":{{}}}}', default_name=slot.kind.title(), default_type=slot.kind))
+            elif name == RIVEN:
+                fresh_upgrades.append(build_upgrade(RIVEN, dict(state.riven_fields[index])))
+            else:
+                fresh_upgrades.append(_db_upgrade(name, slot.kind, state.ranks[index], state.stacks[index], True))
+        fresh_external = build_upgrade("External Buffs", dict(request.external_fields))
+        if is_non_empty_upgrade(fresh_external):
+            fresh_upgrades.append(fresh_external)
+        fresh_target = configured_enemy(request.enemy_name, custom_enemy=request.enemy_name == CUSTOM, custom_entry=request.custom_enemy_entry if request.enemy_name == CUSTOM else None, level=request.enemy_level, steel_path=request.enemy_steel_path, empowered=request.enemy_empowered)
+        fresh_weapon = configured_weapon(
+            request.weapon_type, request.weapon_name, custom_weapon=request.custom_weapon, base_stats={}, upgrades=fresh_upgrades,
+            custom_entry=request.custom_weapon_entry if request.custom_weapon else None, selected_mode=request.attack_mode or None,
+            evolutions=dict(state.evolutions), combo=request.combo_count if request.weapon_type == "Melee" else None,
+            runtime_conditions=request.evolution_runtime, stance_combo=stance_combo if request.weapon_type == "Melee" else None,
+            ability_strength=request.ability_strength, target=fresh_target,
+        )
+        return score_maximize_target(fresh_weapon.results.main.final, maximize_target, request.weakpoint_weight, request.flat_dot_weight)
+
+    def score(*, deadline: int | None = None) -> float | None:
+        nonlocal evaluations, best_seen, budget_limited
+        check_cancelled()
+        slot_keys = []
+        for index, name in enumerate(names):
+            if name == RIVEN:
+                slot_keys.append((name, 0, 0, rolls[index], tuple(sorted(riven_fields[index].items())), ""))
+            elif name == CUSTOM:
+                slot_keys.append((name, 0, 0, "", (), customs[index]))
+            elif name == NONE:
+                slot_keys.append((name, 0, 0, "", (), ""))
+            else:
+                slot_keys.append((name, ranks[index], stacks_list[index], "", (), ""))
+        key = (tuple(slot_keys), tuple(sorted(current_evolutions.items())))
         if key in score_cache:
             return score_cache[key]
+        limit = min(evaluation_budget, deadline) if deadline is not None else evaluation_budget
+        if evaluations >= limit:
+            budget_limited = True
+            return None
         evaluations += 1
         upgrades: list[Upgrade] = []
         if is_non_empty_upgrade(progenitor):
@@ -410,7 +511,16 @@ def optimize_build(request: OptimizeRequest, progress: ProgressCallback | None =
             optimizer_weapon.data.runtime.combo = combo_multiplier_from_initial_combo(optimizer_weapon.results.main.effective.initial_combo, optimizer_weapon)
             optimizer_weapon.results.resolve(validate_cycles=False)
         result = score_maximize_target(optimizer_weapon.results.main.final, maximize_target, request.weakpoint_weight, request.flat_dot_weight)
+        candidate_state = capture_state()
+        if best_seen is None or result > best_seen.score:
+            if evaluations >= limit:
+                budget_limited = True
+                return best_seen.score if best_seen is not None else result
+            evaluations += 1
+            result = fresh_score_state(candidate_state)
         score_cache[key] = result
+        if best_seen is None or result > best_seen.score:
+            best_seen = _ScoredState(result, candidate_state)
         return result
 
     def place(index: int, name: str, *, policy: str, rank: int = 0, stacks: int = 0, roll: str | None = None, fields: dict[str, float] | None = None, custom: str | None = None):
@@ -452,6 +562,8 @@ def optimize_build(request: OptimizeRequest, progress: ProgressCallback | None =
             place(i, NONE, policy=SLOT_POLICY_DISCARD)
 
     baseline = score()
+    if baseline is None:
+        raise RuntimeError("Optimizer evaluation budget is too small to score the starting build.")
     report("Seeded baseline", 0.05, baseline)
 
     # Rank large pools once against the seeded build. The full greedy search then
@@ -477,15 +589,27 @@ def optimize_build(request: OptimizeRequest, progress: ProgressCallback | None =
             if legal(candidate, index):
                 max_rank, max_stacks = max_runtime(candidate, slots[index].kind)
                 place(index, candidate, policy=SLOT_POLICY_DISCARD, rank=max_rank, stacks=max_stacks, fields={})
-                ranked.append((score(), candidate))
+                candidate_score = score()
+                if candidate_score is None:
+                    break
+                ranked.append((candidate_score, candidate))
             screening_done += 1
             if screening_done % 8 == 0:
                 report("Screening candidates...", 0.05 + 0.10 * screening_done / max(screening_total, 1), baseline)
         place(index, prev[0], policy=SLOT_POLICY_DISCARD, rank=prev[1], stacks=prev[2], fields=prev[3], roll=prev[4], custom=prev[5])
         ranked.sort(key=lambda item: (-item[0], item[1].casefold()))
-        retained = [name for _dps, name in ranked[:CANDIDATE_SHORTLIST_LIMIT]]
-        for stat in (*DAMAGE_RELATED_STATS, *DAMAGE_RELATED_BEHAVIORS):
-            matching = [name for _dps, name in ranked if _matches_optimizer_stat(name, stat)]
+        trigger_limited = [name for name in pool if _has_trigger_compatibility(name)]
+        ranked_base = [(dps, name) for dps, name in ranked if name not in trigger_limited]
+        mandatory = [name for name in pool if _has_special_optimizer_behavior(name) and name not in trigger_limited]
+        for i in indices:
+            if names[i] not in {NONE, CUSTOM, RIVEN}:
+                mandatory.append(names[i])
+        retained = list(dict.fromkeys(mandatory))
+        for _dps, name in ranked_base[:CANDIDATE_SHORTLIST_LIMIT]:
+            if name not in retained:
+                retained.append(name)
+        for stat in (*sorted(DAMAGE_RELATED_STATS), *sorted(DAMAGE_RELATED_BEHAVIORS)):
+            matching = [name for _dps, name in ranked_base if _matches_optimizer_stat(name, stat)]
             for name in matching[:CANDIDATE_PER_STAT_LIMIT]:
                 if name not in retained:
                     retained.append(name)
@@ -493,10 +617,10 @@ def optimize_build(request: OptimizeRequest, progress: ProgressCallback | None =
             for name in by_strength[:CANDIDATE_RAW_STAT_LIMIT]:
                 if name not in retained:
                     retained.append(name)
-        for i in indices:
-            if names[i] not in {NONE, CUSTOM, RIVEN} and names[i] not in retained:
-                retained.append(names[i])
-        return retained[:CANDIDATE_SHORTLIST_HARD_CAP]
+        mandatory_count = len(set(mandatory))
+        retained = retained[:max(CANDIDATE_SHORTLIST_HARD_CAP, mandatory_count)]
+        retained.extend(name for name in trigger_limited if name not in retained)
+        return retained
 
     mod_pool = shortlist(mod_pool, pool_groups[0][1])
     stance_pool = shortlist(stance_pool, pool_groups[1][1])
@@ -504,52 +628,27 @@ def optimize_build(request: OptimizeRequest, progress: ProgressCallback | None =
     arcane_pool = shortlist(arcane_pool, pool_groups[3][1])
     report("Candidates ready", 0.12, baseline)
 
-    def hill_climb(*, label: str, swap_limit: int, progress_start: float, progress_span: float) -> None:
+    def greedy_fill(*, label: str, progress_start: float, progress_span: float, slot_order: list[int] | None = None, deadline: int | None = None, defer_trigger_limited: bool = False) -> None:
         nonlocal baseline
-        swaps, improved, last_report_swaps = 0, True, -8
-        while improved and swaps < swap_limit:
-            improved = False
-            for index in open_slots:
-                if swaps >= swap_limit:
-                    break
-                current = names[index]
-                for candidate in pool_for(index):
-                    if swaps >= swap_limit:
-                        break
-                    if candidate == current or not legal(candidate, index):
-                        continue
-                    prev = names[index], ranks[index], stacks_list[index]
-                    max_rank, max_stacks = max_runtime(candidate, slots[index].kind)
-                    place(index, candidate, policy=SLOT_POLICY_DISCARD, rank=max_rank, stacks=max_stacks)
-                    dps = score()
-                    swaps += 1
-                    if dps > baseline:
-                        baseline, improved = dps, True
-                        report(label, progress_start + progress_span * swaps / max(swap_limit, 1), baseline)
-                        last_report_swaps = swaps
-                        break
-                    if swaps - last_report_swaps >= 8:
-                        report(label, progress_start + progress_span * swaps / max(swap_limit, 1), baseline)
-                        last_report_swaps = swaps
-                    place(index, prev[0], policy=SLOT_POLICY_DISCARD, rank=prev[1], stacks=prev[2])
-                if improved:
-                    break
-        report(label, progress_start + progress_span, baseline)
-
-    def greedy_fill(*, label: str, progress_start: float, progress_span: float) -> None:
-        nonlocal baseline
-        n_open = max(len(open_slots), 1)
-        for fill_i, index in enumerate(open_slots):
+        ordered_slots = slot_order or open_slots
+        n_open = max(len(ordered_slots), 1)
+        current_score = score(deadline=deadline)
+        if current_score is None:
+            return
+        baseline = current_score
+        for fill_i, index in enumerate(ordered_slots):
             best_name, best_dps, best_rank, best_stacks = names[index], baseline, ranks[index], stacks_list[index]
             prev = names[index], ranks[index], stacks_list[index], dict(riven_fields[index]), rolls[index], customs[index]
             pool = pool_for(index)
             pool_n = max(len(pool), 1)
             for candidate_i, candidate in enumerate(pool, start=1):
-                if not legal(candidate, index):
+                if defer_trigger_limited and _has_trigger_compatibility(candidate) or not legal(candidate, index):
                     continue
                 max_rank, max_stacks = max_runtime(candidate, slots[index].kind)
                 place(index, candidate, policy=SLOT_POLICY_DISCARD, rank=max_rank, stacks=max_stacks, fields={}, custom=customs[index])
-                dps = score()
+                dps = score(deadline=deadline)
+                if dps is None:
+                    break
                 if dps > best_dps:
                     best_name, best_dps, best_rank, best_stacks = candidate, dps, max_rank, max_stacks
                 if candidate_i == 1 or candidate_i == pool_n or candidate_i % 12 == 0:
@@ -560,6 +659,191 @@ def optimize_build(request: OptimizeRequest, progress: ProgressCallback | None =
                 place(index, best_name, policy=SLOT_POLICY_DISCARD, rank=best_rank, stacks=best_stacks, fields={})
                 baseline = best_dps
             report(f"{label} ({fill_i + 1}/{len(open_slots)})", progress_start + progress_span * (fill_i + 1) / n_open, baseline)
+            if evaluations >= (deadline or evaluation_budget):
+                break
+
+    def replacement_candidates(index: int) -> list[str]:
+        return [NONE, *pool_for(index)]
+
+    def place_candidate(index: int, candidate: str) -> None:
+        if candidate == NONE:
+            place(index, NONE, policy=SLOT_POLICY_DISCARD, rank=0, stacks=0, fields={})
+            return
+        max_rank, max_stacks = max_runtime(candidate, slots[index].kind)
+        place(index, candidate, policy=SLOT_POLICY_DISCARD, rank=max_rank, stacks=max_stacks, fields={})
+
+    def round_robin_moves() -> Iterable[tuple[int, str]]:
+        candidates = {index: replacement_candidates(index) for index in open_slots}
+        for candidate_i in range(max((len(values) for values in candidates.values()), default=0)):
+            for index in open_slots:
+                if candidate_i < len(candidates[index]):
+                    yield index, candidates[index][candidate_i]
+
+    def replacement_pass(*, deadline: int, label: str, collect_frontier: bool) -> tuple[bool, list[_ScoredState], bool]:
+        """Evaluate a complete one-replacement neighborhood fairly across every mutable slot."""
+        nonlocal baseline
+        origin = capture_state()
+        origin_score = baseline
+        best = _ScoredState(origin_score, origin)
+        frontier_by_slot: dict[int, _ScoredState] = {}
+        completed = True
+        for move_i, (index, candidate) in enumerate(round_robin_moves(), start=1):
+            restore_state(origin)
+            if candidate == names[index] or not legal(candidate, index):
+                continue
+            place_candidate(index, candidate)
+            dps = score(deadline=deadline)
+            if dps is None:
+                completed = False
+                break
+            state = capture_state()
+            if dps > best.score:
+                best = _ScoredState(dps, state, index)
+            elif collect_frontier:
+                previous = frontier_by_slot.get(index)
+                if previous is None or dps > previous.score:
+                    frontier_by_slot[index] = _ScoredState(dps, state, index)
+            if move_i == 1 or move_i % 16 == 0:
+                report(label, 0.50 + 0.32 * evaluations / max(evaluation_budget, 1), max(best.score, baseline))
+        restore_state(best.state)
+        improved = best.score > origin_score
+        baseline = best.score
+        frontier = sorted(frontier_by_slot.values(), key=lambda item: (-item.score, item.changed_slot))
+        return improved, frontier, completed
+
+    def swap_payload(first: int, second: int) -> None:
+        names[first], names[second] = names[second], names[first]
+        ranks[first], ranks[second] = ranks[second], ranks[first]
+        stacks_list[first], stacks_list[second] = stacks_list[second], stacks_list[first]
+        rolls[first], rolls[second] = rolls[second], rolls[first]
+        riven_fields[first], riven_fields[second] = riven_fields[second], riven_fields[first]
+        customs[first], customs[second] = customs[second], customs[first]
+
+    def ordering_pass(*, deadline: int, label: str) -> tuple[bool, bool]:
+        """Optimize slot order separately; elemental combinations depend on mod order."""
+        nonlocal baseline
+        reorderable = [index for index in open_slots if slots[index].kind == "mod" and not slots[index].exilus and not slots[index].stance and names[index] != NONE]
+        origin = capture_state()
+        best = _ScoredState(baseline, origin)
+        completed = True
+        for first, second in itertools.combinations(reorderable, 2):
+            restore_state(origin)
+            swap_payload(first, second)
+            dps = score(deadline=deadline)
+            if dps is None:
+                completed = False
+                break
+            if dps > best.score:
+                best = _ScoredState(dps, capture_state())
+        restore_state(best.state)
+        improved = best.score > baseline
+        baseline = best.score
+        report(label, 0.50 + 0.32 * evaluations / max(evaluation_budget, 1), baseline)
+        return improved, completed
+
+    def variable_neighborhood_descent(*, deadline: int, label: str, collect_frontier: bool = True) -> tuple[list[_ScoredState], bool]:
+        """Run order and replacement neighborhoods until locally stable or out of budget."""
+        frontier: list[_ScoredState] = []
+        completed = True
+        while evaluations < deadline:
+            order_improved, order_completed = ordering_pass(deadline=deadline, label=f"{label}: ordering")
+            replace_improved, frontier, replace_completed = replacement_pass(deadline=deadline, label=f"{label}: replacements", collect_frontier=collect_frontier)
+            completed = order_completed and replace_completed
+            if not completed or not order_improved and not replace_improved:
+                break
+        return frontier, completed
+
+    def beam_escape(frontier: list[_ScoredState], *, deadline: int, width: int, label: str) -> bool:
+        """Expand a second exact move from strong non-improving neighbors to cross two-move valleys."""
+        nonlocal baseline
+        if width <= 0 or not frontier or evaluations >= deadline:
+            return False
+        incumbent = best_seen
+        if incumbent is None:
+            return False
+        starts = frontier[:width]
+        for start_i, start in enumerate(starts):
+            if evaluations >= deadline:
+                break
+            restore_state(start.state)
+            per_start_deadline = min(deadline, evaluations + max((deadline - evaluations) // max(len(starts) - start_i, 1), 1))
+            origin = start.state
+            for move_i, (index, candidate) in enumerate(round_robin_moves(), start=1):
+                restore_state(origin)
+                if candidate == names[index] or not legal(candidate, index):
+                    continue
+                place_candidate(index, candidate)
+                if score(deadline=per_start_deadline) is None:
+                    break
+                if move_i == 1 or move_i % 16 == 0:
+                    report(label, 0.72 + 0.12 * evaluations / max(evaluation_budget, 1), best_seen.score if best_seen else baseline)
+        if best_seen is None:
+            restore_state(incumbent.state)
+            baseline = incumbent.score
+            return False
+        restore_state(best_seen.state)
+        improved = best_seen.score > incumbent.score
+        baseline = best_seen.score
+        return improved
+
+    def diversified_rebuild(frontier: list[_ScoredState], *, deadline: int, variants: int, label: str) -> bool:
+        """Deterministically destroy and greedily repair different parts of strong complete builds."""
+        nonlocal baseline
+        incumbent = best_seen
+        if incumbent is None or not frontier or evaluations >= deadline:
+            return False
+        mutable_mods = [index for index in open_slots if slots[index].kind == "mod" and not slots[index].exilus and not slots[index].stance]
+        if len(mutable_mods) < 2:
+            return False
+        for variant in range(min(variants, len(frontier))):
+            if evaluations >= deadline:
+                break
+            restore_state(frontier[variant].state)
+            first = mutable_mods[variant % len(mutable_mods)]
+            second = mutable_mods[(variant * 3 + 1) % len(mutable_mods)]
+            if second == first:
+                second = mutable_mods[(mutable_mods.index(first) + 1) % len(mutable_mods)]
+            place_candidate(first, NONE)
+            place_candidate(second, NONE)
+            local = score(deadline=deadline)
+            if local is None:
+                break
+            baseline = local
+            ordered = [second, first]
+            greedy_fill(label=f"{label} {variant + 1}/{variants}", progress_start=0.82, progress_span=0.08, slot_order=ordered, deadline=deadline)
+        if best_seen is None:
+            restore_state(incumbent.state)
+            baseline = incumbent.score
+            return False
+        restore_state(best_seen.state)
+        improved = best_seen.score > incumbent.score
+        baseline = best_seen.score
+        return improved
+
+    def run_quality_search(*, deadline: int, label: str) -> bool:
+        """Continue the incumbent through progressively broader deterministic neighborhoods."""
+        nonlocal baseline
+        if evaluations >= deadline:
+            return False
+        starting_score = best_seen.score if best_seen else baseline
+        remaining = deadline - evaluations
+        if active_quality == OPTIMIZE_SEARCH_FAST:
+            vnd_deadline = deadline
+        elif active_quality == OPTIMIZE_SEARCH_BALANCED:
+            vnd_deadline = evaluations + max(int(remaining * 0.68), 1)
+        else:
+            vnd_deadline = evaluations + max(int(remaining * 0.48), 1)
+        frontier, _completed = variable_neighborhood_descent(deadline=vnd_deadline, label=label)
+        if active_quality != OPTIMIZE_SEARCH_FAST and evaluations < deadline:
+            width = BALANCED_BEAM_WIDTH if active_quality == OPTIMIZE_SEARCH_BALANCED else THOROUGH_BEAM_WIDTH
+            beam_deadline = deadline if active_quality == OPTIMIZE_SEARCH_BALANCED else evaluations + max(int((deadline - evaluations) * 0.68), 1)
+            beam_escape(frontier, deadline=beam_deadline, width=width, label=f"{label}: two-move beam")
+        if active_quality == OPTIMIZE_SEARCH_THOROUGH and evaluations < deadline:
+            diversified_rebuild(frontier, deadline=deadline, variants=THOROUGH_REBUILD_VARIANTS, label=f"{label}: rebuild")
+        if best_seen is not None:
+            restore_state(best_seen.state)
+            baseline = best_seen.score
+        return baseline > starting_score
 
     evolution_choices: dict[int, tuple[int, ...]] = {}
     if request.find_optimal_evolutions:
@@ -571,10 +855,10 @@ def optimize_build(request: OptimizeRequest, progress: ProgressCallback | None =
                 custom_metadata = None
         evolution_choices = weapon_evolution_perk_choices(None if request.custom_weapon else request.weapon_name, custom_metadata=custom_metadata)
 
-    def search_evolutions(*, label: str, progress_start: float, progress_span: float) -> bool:
+    def search_evolutions(*, label: str, progress_start: float, progress_span: float, deadline: int) -> bool:
         """Pick Incarnon perks for the current build. Small spaces are exhaustive; large ones use coordinate descent."""
         nonlocal baseline, current_evolutions
-        if not evolution_choices:
+        if not evolution_choices or evaluations >= deadline:
             return False
         tiers = sorted(evolution_choices)
         perk_lists = [evolution_choices[tier] for tier in tiers]
@@ -584,12 +868,17 @@ def optimize_build(request: OptimizeRequest, progress: ProgressCallback | None =
             total *= max(len(options), 1)
 
         if total <= EVOLUTION_EXHAUSTIVE_LIMIT:
-            best_evolutions: dict[int, int] = {}
-            best_dps = -1.0
+            best_evolutions = dict(previous)
+            previous_score = score(deadline=deadline)
+            if previous_score is None:
+                return False
+            best_dps = previous_score
             for combo_i, combo in enumerate(itertools.product(*perk_lists), start=1):
                 trial = {tier: perk for tier, perk in zip(tiers, combo)}
                 current_evolutions = trial
-                dps = score()
+                dps = score(deadline=deadline)
+                if dps is None:
+                    break
                 if dps > best_dps:
                     best_dps, best_evolutions = dps, dict(trial)
                 if combo_i == 1 or combo_i == total or combo_i % 8 == 0:
@@ -605,7 +894,10 @@ def optimize_build(request: OptimizeRequest, progress: ProgressCallback | None =
             pick = current_evolutions.get(tier, choices[0])
             current[tier] = pick if pick in choices else choices[0]
         current_evolutions = dict(current)
-        best_dps = score()
+        best_dps = score(deadline=deadline)
+        if best_dps is None:
+            current_evolutions = previous
+            return False
         steps = max(sum(len(evolution_choices[tier]) for tier in tiers) * EVOLUTION_DESCENT_PASSES, 1)
         step_i = 0
         for pass_i in range(EVOLUTION_DESCENT_PASSES):
@@ -615,7 +907,11 @@ def optimize_build(request: OptimizeRequest, progress: ProgressCallback | None =
                 for perk in evolution_choices[tier]:
                     step_i += 1
                     current_evolutions = {**current, tier: perk}
-                    dps = score()
+                    dps = score(deadline=deadline)
+                    if dps is None:
+                        current_evolutions = dict(current)
+                        baseline = best_dps
+                        return current != previous
                     if dps > best_dps:
                         best_dps, best_perk, improved = dps, perk, True
                     if step_i == 1 or step_i == steps or step_i % 6 == 0:
@@ -631,29 +927,32 @@ def optimize_build(request: OptimizeRequest, progress: ProgressCallback | None =
 
     # Seed Incarnon perks before greedy fill when requested, so mod choices see the right attack profile.
     if request.find_optimal_evolutions and evolution_choices:
-        search_evolutions(label="Incarnon seed", progress_start=0.12, progress_span=0.05)
+        search_evolutions(label="Incarnon seed", progress_start=0.12, progress_span=0.05, deadline=primary_budget)
 
-    # 3) Greedy fill open slots by best ΔDPS.
-    greedy_fill(label="Greedy fill", progress_start=0.17, progress_span=0.38)
-    # 4) Local 1-swap hill climb.
-    hill_climb(label="Hill climb…", swap_limit=HILL_CLIMB_SWAP_LIMIT, progress_start=0.55, progress_span=0.10)
+    # 3) Greedy fill supplies a fast incumbent shared by every quality profile.
+    greedy_fill(label="Greedy fill", progress_start=0.17, progress_span=0.32, deadline=primary_budget, defer_trigger_limited=True)
+    optional_phases = int(bool(request.find_optimal_evolutions and evolution_choices)) + int(bool(request.find_optimal_riven))
+    initial_search_deadline = primary_budget if not optional_phases else min(primary_budget, evaluations + max(int((primary_budget - evaluations) * 0.55), 1))
+    run_quality_search(deadline=initial_search_deadline, label=f"{search_quality} search")
 
-    # 5) One Incarnon pass after mods settle — avoid stacked refine loops.
+    # 4) Revisit Incarnon perks after the first complete build, then refine mods again later.
     evolution_note = ""
     evolutions_optimized = False
     if request.find_optimal_evolutions:
         if not evolution_choices:
             evolution_note = " No Incarnon evolutions available."
         else:
-            changed = search_evolutions(label="Incarnon search", progress_start=0.65, progress_span=0.06)
-            if changed:
-                hill_climb(label="Refine mods…", swap_limit=EVOLUTION_REFINE_HILL_LIMIT, progress_start=0.71, progress_span=0.05)
+            remaining_after_core = max(primary_budget - evaluations, 0)
+            evolution_deadline = min(primary_budget, evaluations + max(int(remaining_after_core * (0.35 if request.find_optimal_riven else 0.50)), 1))
+            search_evolutions(label="Incarnon search", progress_start=0.65, progress_span=0.06, deadline=evolution_deadline)
             evolutions_optimized = True
             picks = ", ".join(f"E{tier}:P{perk}" for tier, perk in sorted(current_evolutions.items()))
-            evolution_note = f" Optimal Incarnon ({picks})."
+            evolution_note = f" Best-found Incarnon ({picks})."
 
     riven_note = ""
     if request.find_optimal_riven:
+        riven_remaining = max(primary_budget - evaluations, 0)
+        riven_deadline = min(primary_budget, evaluations + max(int(riven_remaining * 0.78), 1))
         targets = [i for i in open_slots if slots[i].kind == "mod" and not slots[i].exilus and not slots[i].stance]
         ordered_targets = []
         for group in (
@@ -672,7 +971,9 @@ def optimize_build(request: OptimizeRequest, progress: ProgressCallback | None =
             for i in open_slots:
                 if names[i] == RIVEN:
                     place(i, NONE, policy=SLOT_POLICY_DISCARD, fields={})
-            baseline = score()
+            without_riven_score = score(deadline=riven_deadline)
+            if without_riven_score is not None:
+                baseline = without_riven_score
             saved_slots = {i: (names[i], ranks[i], stacks_list[i], dict(riven_fields[i]), rolls[i]) for i in ordered_targets}
 
             def restore_targets() -> None:
@@ -689,13 +990,15 @@ def optimize_build(request: OptimizeRequest, progress: ProgressCallback | None =
                 for index in ordered_targets:
                     saved = saved_slots[index]
                     place(index, NONE, policy=SLOT_POLICY_DISCARD, fields={})
-                    cleared = score()
+                    cleared = score(deadline=riven_deadline)
                     place(index, saved[0], policy=SLOT_POLICY_DISCARD, rank=saved[1], stacks=saved[2], fields=saved[3], roll=saved[4])
+                    if cleared is None:
+                        break
                     if cleared > best_cleared:
                         weakest, best_cleared = index, cleared
                 seat = weakest
 
-            def greedy_riven(roll_name: str, *, progress_start: float, progress_span: float) -> dict[str, float]:
+            def greedy_riven(roll_name: str, *, progress_start: float, progress_span: float, deadline: int) -> dict[str, float]:
                 pos_count, neg_count, _b, _m = RIVEN_ROLL_CONFIGS[roll_name]
                 chosen: list[tuple[str, float]] = []
                 used: set[str] = set()
@@ -718,7 +1021,9 @@ def optimize_build(request: OptimizeRequest, progress: ProgressCallback | None =
                             value = limits[1]
                             trial = {**dict(chosen), stat: value}
                             place(seat, RIVEN, policy=SLOT_POLICY_DISCARD, roll=roll_name, fields=trial)
-                            dps = score()
+                            dps = score(deadline=deadline)
+                            if dps is None:
+                                break
                             if dps > pick_dps:
                                 pick, pick_dps = (stat, value), dps
                         pick_i += 1
@@ -736,9 +1041,11 @@ def optimize_build(request: OptimizeRequest, progress: ProgressCallback | None =
             for roll_i, roll_name in enumerate(RIVEN_ROLL_OPTIONS):
                 roll_start = 0.76 + 0.10 * roll_i / n_rolls
                 roll_span = 0.10 / n_rolls
-                fields = greedy_riven(roll_name, progress_start=roll_start, progress_span=roll_span)
+                fields = greedy_riven(roll_name, progress_start=roll_start, progress_span=roll_span, deadline=riven_deadline)
                 if fields:
                     roll_rivens.append((roll_name, fields))
+                if evaluations >= riven_deadline:
+                    break
             restore_targets()
 
             # Test each discovered Riven in every open mod slot (cheap: one score each).
@@ -750,34 +1057,68 @@ def optimize_build(request: OptimizeRequest, progress: ProgressCallback | None =
                     check_i += 1
                     restore_targets()
                     place(target, RIVEN, policy=SLOT_POLICY_DISCARD, roll=roll_name, fields=fields)
-                    dps = score()
+                    dps = score(deadline=riven_deadline)
+                    if dps is None:
+                        break
                     if check_i == 1 or check_i == checks or check_i % 3 == 0:
                         report(f"Riven slot check ({check_i}/{checks})", 0.86 + 0.08 * check_i / checks, best_dps)
                     if dps > best_dps:
                         best_dps, best_target, best_roll, best_fields = dps, target, roll_name, fields
+                if evaluations >= riven_deadline:
+                    break
             restore_targets()
             if best_target is not None and best_fields:
                 place(best_target, RIVEN, policy=SLOT_POLICY_DISCARD, roll=best_roll, fields=best_fields)
                 baseline = best_dps
-                riven_note = f" Optimal Riven on {SLOT_CONFIGS[best_target]['label']} ({best_roll})."
+                riven_note = f" Best-found Riven on {SLOT_CONFIGS[best_target]['label']} ({best_roll})."
             else:
                 riven_note = " Riven search found no improvement over the mods it would replace."
-            # Riven can change which Incarnon perks are best — one quick pass, no extra hill climb.
+            # Riven can change both Incarnon perks and the best surrounding mods.
             if request.find_optimal_evolutions and evolution_choices:
-                if search_evolutions(label="Incarnon after Riven", progress_start=0.94, progress_span=0.04):
+                if search_evolutions(label="Incarnon after Riven", progress_start=0.94, progress_span=0.02, deadline=primary_budget):
                     picks = ", ".join(f"E{tier}:P{perk}" for tier, perk in sorted(current_evolutions.items()))
-                    evolution_note = f" Optimal Incarnon ({picks})."
+                    evolution_note = f" Best-found Incarnon ({picks})."
                     evolutions_optimized = True
 
-    final_dps = score()
+    # Spend any reserved budget refining the build around the final Riven/evolution context.
+    while evaluations < primary_budget:
+        before = best_seen.score if best_seen else baseline
+        evolution_changed = False
+        if request.find_optimal_evolutions and evolution_choices:
+            evolution_refine_deadline = min(primary_budget, evaluations + max(int((primary_budget - evaluations) * 0.25), 1))
+            evolution_changed = search_evolutions(label="Final Incarnon refinement", progress_start=0.95, progress_span=0.01, deadline=evolution_refine_deadline)
+        build_changed = run_quality_search(deadline=primary_budget, label="Final refinement")
+        if not evolution_changed and not build_changed or best_seen is None or best_seen.score <= before:
+            break
+
+    # Thorough is a strict continuation of the complete Balanced search. Expanding
+    # the pools only after that incumbent exists guarantees it cannot regress.
+    if search_quality == OPTIMIZE_SEARCH_THOROUGH and evaluations < evaluation_budget:
+        active_quality = OPTIMIZE_SEARCH_THOROUGH
+        mod_pool = list(full_mod_pool)
+        stance_pool = list(full_stance_pool)
+        exilus_pool = list(full_exilus_pool)
+        arcane_pool = list(full_arcane_pool)
+        run_quality_search(deadline=evaluation_budget, label="Thorough full-pool search")
+        if request.find_optimal_evolutions and evolution_choices and evaluations < evaluation_budget:
+            search_evolutions(label="Thorough Incarnon refinement", progress_start=0.96, progress_span=0.01, deadline=evaluation_budget)
+            run_quality_search(deadline=evaluation_budget, label="Thorough final refinement")
+
+    if best_seen is None:
+        raise RuntimeError("Optimizer did not produce a scored build.")
+    restore_state(best_seen.state)
+    baseline = best_seen.score
+    final_dps = best_seen.score
     report("Finishing…", 0.99, final_dps)
     filled = sum(1 for name in names if name != NONE)
     stance_name = equipped_stance_name()
     stance_note = f" Stance {stance_name}." if request.weapon_type == "Melee" and stance_name not in {NONE, CUSTOM, RIVEN} else ""
+    termination_reason = "evaluation budget reached" if evaluations >= evaluation_budget or budget_limited else "local optimum reached"
     return OptimizeResult(
         slot_names=names, slot_ranks=ranks, slot_stacks=stacks_list, slot_policies=policies,
         riven_rolls=rolls, riven_fields=riven_fields, custom_entries=customs,
         total_dps=final_dps, evaluations=evaluations,
-        message=f"Optimized {filled} slots | {evaluations} evaluations | {final_dps:,.1f} {maximize_label}.{riven_note}{evolution_note}{stance_note}",
+        message=f"{search_quality} search · {termination_reason} | Best found: {filled} slots | {evaluations} evaluations | {final_dps:,.1f} {maximize_label}.{riven_note}{evolution_note}{stance_note}",
         evolutions=dict(current_evolutions), evolutions_optimized=evolutions_optimized,
+        search_quality=search_quality, termination_reason=termination_reason,
     )

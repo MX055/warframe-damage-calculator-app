@@ -16,6 +16,7 @@ from .constants import (
     DAMAGE_TYPES,
     DEFAULT_DAMAGE_TYPES,
     DEFAULT_OPTIMIZE_MAXIMIZE,
+    DEFAULT_OPTIMIZE_SEARCH,
     FIELD_WEAPON_RULES,
     INITIAL_COMBO_OPTION,
     INITIAL_COMBO_RUNTIME,
@@ -24,6 +25,7 @@ from .constants import (
     NO_EFFECT,
     OPTIMIZE_MAXIMIZE_OPTIONS,
     OPTIMIZE_MAXIMIZE_TARGETS,
+    OPTIMIZE_SEARCH_OPTIONS,
     RIVEN_NON_NEGATIVE_STATS,
     RIVEN_ROLL_CONFIGS,
     RIVEN_ROLL_OPTIONS,
@@ -493,9 +495,11 @@ class CalculatorState(rx.State):
     optimize_find_riven: bool = False
     optimize_find_evolutions: bool = False
     optimize_maximize_target: str = DEFAULT_OPTIMIZE_MAXIMIZE
+    optimize_search_quality: str = DEFAULT_OPTIMIZE_SEARCH
     optimize_weakpoint_weight: int = 25
     optimize_flat_dot_weight: int = 50
     optimize_maximize_options: list[str] = rx.field(default_factory=lambda: list(OPTIMIZE_MAXIMIZE_OPTIONS))
+    optimize_search_options: list[str] = rx.field(default_factory=lambda: list(OPTIMIZE_SEARCH_OPTIONS))
     optimize_status: str = ""
     optimize_running: bool = False
     optimize_best_dps: str = ""
@@ -651,6 +655,7 @@ class CalculatorState(rx.State):
         self.optimize_find_riven = False
         self.optimize_find_evolutions = False
         self.optimize_maximize_target = DEFAULT_OPTIMIZE_MAXIMIZE
+        self.optimize_search_quality = DEFAULT_OPTIMIZE_SEARCH
         self.optimize_weakpoint_weight = 25
         self.optimize_flat_dot_weight = 50
         self.optimize_excluded_upgrades = []
@@ -1178,6 +1183,12 @@ class CalculatorState(rx.State):
             self._invalidate_optimizer_result()
 
     @rx.event
+    def set_optimize_search_quality(self, value: str):
+        if value in self.optimize_search_options:
+            self.optimize_search_quality = value
+            self._invalidate_optimizer_result()
+
+    @rx.event
     def set_optimize_weakpoint_weight(self, value: str | int | float):
         try:
             weight = int(float(value))
@@ -1289,6 +1300,7 @@ class CalculatorState(rx.State):
                 ],
                 find_optimal_riven=bool(self.optimize_find_riven) and not riven_locked and self.riven_available,
                 find_optimal_evolutions=bool(self.optimize_find_evolutions) and bool(self.evolution_options),
+                search_quality=self.optimize_search_quality,
                 maximize_target=OPTIMIZE_MAXIMIZE_TARGETS.get(self.optimize_maximize_target, OPTIMIZE_MAXIMIZE_TARGETS[DEFAULT_OPTIMIZE_MAXIMIZE]),
                 weakpoint_weight=self.optimize_weakpoint_weight / 100.0,
                 flat_dot_weight=self.optimize_flat_dot_weight / 100.0,

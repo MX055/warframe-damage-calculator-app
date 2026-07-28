@@ -1326,6 +1326,13 @@ def optimizer_run_controls() -> rx.Component:
                 CalculatorState.set_optimize_maximize_target,
                 disabled=disabled,
             ),
+            select_control(
+                "Search quality",
+                CalculatorState.optimize_search_options,
+                CalculatorState.optimize_search_quality,
+                CalculatorState.set_optimize_search_quality,
+                disabled=disabled,
+            ),
             rx.cond(
                 CalculatorState.optimize_maximize_target == "Balanced (DPS · DPH)",
                 labeled_control(
@@ -1364,10 +1371,22 @@ def optimizer_run_controls() -> rx.Component:
                 ),
                 rx.box(),
             ),
-            columns="repeat(3, minmax(0, 1fr))",
+            columns="repeat(4, minmax(0, 1fr))",
             class_name="optimizer-maximize-row",
             width="100%",
             gap="3",
+        ),
+        rx.text(
+            rx.cond(
+                CalculatorState.optimize_search_quality == "Fast",
+                "Fast uses up to 400 evaluations (about 8 seconds).",
+                rx.cond(
+                    CalculatorState.optimize_search_quality == "Thorough",
+                    "Thorough uses up to 2,200 evaluations (about 45–60 seconds).",
+                    "Balanced uses up to 700 evaluations (about 15 seconds).",
+                ),
+            ),
+            class_name="optimizer-help",
         ),
         rx.cond(
             CalculatorState.optimize_maximize_target == "Balanced (DPS · DPH)",
