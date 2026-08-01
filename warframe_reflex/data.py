@@ -9,7 +9,8 @@ from pathlib import Path
 
 import warframe_damage_calculator
 from warframe_damage_calculator import Enemy, Upgrade, arsenal
-from warframe_damage_calculator.engine.optimizer import DEFAULT_UPGRADE_BLACKLIST, FACTION_DAMAGE_STATS as DEFAULT_FACTION_DAMAGE_STATS
+from warframe_damage_calculator.optimizer.candidates import DEFAULT_UPGRADE_BLACKLIST
+from warframe_damage_calculator.optimizer.rivens import FACTION_DAMAGE_STATS as DEFAULT_FACTION_DAMAGE_STATS
 HEAVY_ATTACK_CATEGORIES = frozenset({"heavy", "heavy_attack"})
 SLIDE_ATTACK_CATEGORIES = frozenset({"slide", "slide_attack"})
 

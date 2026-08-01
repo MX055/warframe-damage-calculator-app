@@ -1,5 +1,5 @@
 from warframe_damage_calculator import Arcane, Mod
-from warframe_damage_calculator.engine.optimizer import DEFAULT_UPGRADE_BLACKLIST
+from warframe_damage_calculator.optimizer.candidates import DEFAULT_UPGRADE_BLACKLIST
 
 from warframe_reflex.data import database_conditional_info, database_enemy, database_max_stacks, database_upgrade
 from warframe_reflex.engine import build_upgrade, configured_weapon, main_metrics, upgrade_stat_rows

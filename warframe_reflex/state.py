@@ -8,7 +8,7 @@ from typing import Any
 
 import reflex as rx
 from warframe_damage_calculator import Arcane, Dist, Mod, Progenitor, Upgrade
-from warframe_damage_calculator.engine.optimizer import DEFAULT_UPGRADE_BLACKLIST
+from warframe_damage_calculator.optimizer.candidates import DEFAULT_UPGRADE_BLACKLIST
 
 from .constants import (
     ARCANE_FIELD,

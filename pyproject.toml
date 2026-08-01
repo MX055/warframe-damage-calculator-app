@@ -5,7 +5,7 @@ description = "Reflex interface for warframe_damage_calculator"
 requires-python = ">=3.14"
 dependencies = [
     "reflex>=0.9.6.post1,<0.10",
-    "warframe-damage-calculator @ git+https://github.com/MX055/warframe-damage-calculator.git@main",
+    "warframe-damage-calculator @ git+https://github.com/MX055/warframe-damage-calculator.git@806e1626fd889aa7f7824a1115b3aa8762826a7c",
 ]
 
 [tool.uv]
