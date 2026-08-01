@@ -17,7 +17,6 @@ from .constants import (
     SLOT_CONFIGS,
     SLOT_POLICY_DISCARD,
     SLOT_POLICY_KEEP,
-    SLOT_POLICY_KEEP_IN_SLOT,
     STANCE_SLOT_INDEX,
     WEAPON_TYPE_OPTIONS,
 )
@@ -739,6 +738,15 @@ def enemy_section() -> rx.Component:
                     ),
                 ),
                 rx.cond(
+                    ~CalculatorState.no_enemy,
+                    select_control(
+                        "Body Part",
+                        CalculatorState.optimize_body_part_options,
+                        CalculatorState.optimize_body_part,
+                        CalculatorState.set_optimize_body_part,
+                    ),
+                ),
+                rx.cond(
                     (~CalculatorState.no_enemy) & (~CalculatorState.custom_enemy),
                     rx.grid(
                         number_control("Level", CalculatorState.enemy_level, CalculatorState.set_enemy_level, minimum=1, maximum=9999, step="1"),
@@ -1244,9 +1252,8 @@ def optimizer_policy_select(index: int) -> rx.Component:
         rx.select.trigger(width="100%", min_width="0", class_name="optimizer-policy-trigger"),
         rx.select.content(
             rx.select.group(
-                rx.select.item("Replace", value=SLOT_POLICY_DISCARD),
-                rx.select.item("Keep in this build", value=SLOT_POLICY_KEEP),
-                rx.select.item("Keep in this slot", value=SLOT_POLICY_KEEP_IN_SLOT),
+                rx.select.item("Not kept", value=SLOT_POLICY_DISCARD),
+                rx.select.item("Keep", value=SLOT_POLICY_KEEP),
             ),
             position="popper",
         ),
@@ -1356,40 +1363,30 @@ def optimizer_run_controls() -> rx.Component:
                     class_name="optimizer-balance-slider", aria_label="Flat DOT damage weight",
                 ),
             ),
-            rx.cond(
-                CalculatorState.enemy_has_weakpoint,
-                labeled_control(
-                    rx.hstack(
-                        rx.text(rx.text.strong("Normal "), CalculatorState.optimize_normal_weight, "%", class_name="optimizer-help"),
-                        rx.spacer(),
-                        rx.text(rx.text.strong("Weakpoint "), CalculatorState.optimize_weakpoint_weight, "%", class_name="optimizer-help"),
-                        width="100%",
-                        align="center",
-                    ),
-                    rx.el.input(
-                        type="range", min="0", max="100", step="5",
-                        value=CalculatorState.optimize_weakpoint_weight,
-                        on_change=CalculatorState.set_optimize_weakpoint_weight, disabled=disabled,
-                        class_name="optimizer-balance-slider", aria_label="Weakpoint damage weight",
-                    ),
-                ),
-            ),
-            columns=rx.cond(CalculatorState.enemy_has_weakpoint, "repeat(4, minmax(0, 1fr))", "repeat(3, minmax(0, 1fr))"),
+            columns="repeat(3, minmax(0, 1fr))",
             class_name="optimizer-maximize-row",
             width="100%",
             gap="3",
         ),
         rx.text(
             rx.cond(
-                CalculatorState.optimize_search_quality == "Max",
-                "Max stress-tests every search stage with up to 20,000 evaluations.",
+                CalculatorState.optimize_search_quality == "Low",
+                "Low uses up to 5,000 evaluations.",
                 rx.cond(
-                    CalculatorState.optimize_search_quality == "Fast",
-                    "Fast uses up to 700 evaluations.",
-                    "Balanced uses up to 2,200 evaluations.",
+                    CalculatorState.optimize_search_quality == "Medium",
+                    "Medium uses up to 10,000 evaluations.",
+                    rx.cond(
+                        CalculatorState.optimize_search_quality == "High",
+                        "High uses up to 20,000 evaluations.",
+                        "Max uses up to 100,000 evaluations.",
+                    ),
                 ),
             ),
             class_name="optimizer-help",
+        ),
+        rx.cond(
+            CalculatorState.optimize_search_quality == "Max",
+            rx.text("Warning: Max will take longer to resolve compared to High and produce nearly identical results.", class_name="optimizer-warning"),
         ),
         # rx.text("Balances DPS against DPH, normal against weakpoint damage when available, and direct damage against flat DOT.", class_name="optimizer-help"),
         rx.cond(
@@ -1413,7 +1410,7 @@ def optimizer_run_controls() -> rx.Component:
                 ),
                 rx.cond(
                     CalculatorState.riven_optimize_disabled,
-                    rx.text("Riven search is disabled while a Riven is marked keep or keep in slot.", class_name="optimizer-warning"),
+                    rx.text("Riven search is disabled while a Riven is marked Keep.", class_name="optimizer-warning"),
                 ),
                 width="100%",
                 align="start",
@@ -1482,7 +1479,7 @@ def optimizer_run_controls() -> rx.Component:
                     rx.text(CalculatorState.optimize_phase, class_name="empty-text"),
                     rx.spacer(),
                     rx.text(CalculatorState.optimize_elapsed, class_name="empty-text optimizer-elapsed"),
-                    rx.text(CalculatorState.optimize_evaluations, " evaluations", class_name="empty-text"),
+                    rx.text(CalculatorState.optimize_evaluations, " / ", CalculatorState.optimize_evaluation_budget, " evaluations", class_name="empty-text"),
                     width="100%",
                 ),
                 width="100%",
@@ -1505,7 +1502,7 @@ def optimizer_section() -> rx.Component:
                 header=rx.hstack(
                     rx.vstack(
                         rx.text("Optimization menu", class_name="optimizer-menu-title"),
-                        rx.text("Keep, replace, and exclusion rules", class_name="optimizer-help"),
+                        rx.text("Keep and exclusion rules", class_name="optimizer-help"),
                         align="start",
                         gap="1",
                     ),
@@ -1523,7 +1520,7 @@ def optimizer_section() -> rx.Component:
                     rx.grid(
                         rx.vstack(
                             rx.text("Current build rules", class_name="optimizer-group-title"),
-                            rx.text("Discard lets the optimizer replace an upgrade. Keep may move it; keep in slot locks its position.", class_name="optimizer-help"),
+                            rx.text("Only components marked Keep are passed to the optimizer, and they remain locked in their current slots.", class_name="optimizer-help"),
                             rx.vstack(
                                 rx.cond(CalculatorState.stance_slot_available, optimizer_rule_row(STANCE_SLOT_INDEX), rx.fragment()),
                                 *[optimizer_rule_row(index) for index in OPTIMIZER_SLOT_ORDER if index != STANCE_SLOT_INDEX],

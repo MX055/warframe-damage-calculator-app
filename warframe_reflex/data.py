@@ -9,7 +9,9 @@ from pathlib import Path
 
 import warframe_damage_calculator
 from warframe_damage_calculator import Enemy, Upgrade, arsenal
-from warframe_damage_calculator.utils.constants import HEAVY_ATTACK_CATEGORIES, SLIDE_ATTACK_CATEGORIES
+from warframe_damage_calculator.engine.optimizer import DEFAULT_UPGRADE_BLACKLIST, FACTION_DAMAGE_STATS as DEFAULT_FACTION_DAMAGE_STATS
+HEAVY_ATTACK_CATEGORIES = frozenset({"heavy", "heavy_attack"})
+SLIDE_ATTACK_CATEGORIES = frozenset({"slide", "slide_attack"})
 
 from .constants import WEAPON_CATEGORY_TYPES, WEAPON_COMPATIBILITY_FAMILIES, WEAPON_TYPES
 
@@ -30,18 +32,6 @@ AUTOMATIC_CONDITIONS = {
 }
 
 FACTION_DAMAGE_STATS = {"corpus damage", "corrupted damage", "grineer damage", "infested damage", "murmur damage", "narmer damage", "orokin damage", "sentient damage"}
-
-EXTERNAL_ACTIVATION_UPGRADES_WITHOUT_DATABASE_CONDITIONS = {"Melee Careen", "Melee Retaliation", "Secondary Kinship", "Secondary Surge"}
-
-WEAPON_ACTIVATED_CONDITIONS = {
-    "cold proc", "cold status effect", "consecutive throw", "downed enemy", "each tendril active", "health drain", "hit", "kill", "no enemies within 10m",
-    "on 2 hits within 0 02s", "on 2 hits within 0 2s", "on 4 hits within 0 05s", "on 5 pellet headshot", "on alt fire", "on cold status effect",
-    "on combined status at 10 stacks", "on critical hit", "on damaging enemies with heat", "on direct hit", "on electricity status effect", "on full charge",
-    "on headshot", "on headshot kill", "on headshot kill on eximus", "on heat status effect", "on hit", "on kill", "on orb strike", "on proc", "on pull",
-    "on status effect", "on toxin status effect", "on weak point hits with primary fire", "stacks", "status type", "target 15m", "weak point hit",
-    "weak point kill",
-}
-
 
 def type_query_for_weapon_type(weapon_type_name: str) -> str:
     return {"Primary": "primary", "Secondary": "secondary", "Melee": "melee"}[weapon_type_name]
@@ -74,11 +64,14 @@ def raw_database() -> dict:
 
 
 def raw_weapons_database() -> dict:
-    return raw_database().get("weapons", {}) or {}
+    weapons = raw_database().get("weapons", {}) or {}
+    section_types = {"primaries": "primary", "secondaries": "secondary", "melees": "melee", "archguns": "archgun"}
+    return {name: record | {"type": section_types[section]} for section in section_types for name, record in (weapons.get(section, {}) or {}).items()}
 
 
 def raw_upgrades_database() -> dict:
-    return raw_database().get("upgrades", {}) or {}
+    upgrades = raw_database().get("upgrades", {}) or {}
+    return {name: record | {"type": kind[:-1] if kind.endswith("s") else kind} for kind in ("mods", "arcanes", "perks") for name, record in (upgrades.get(kind, {}) or {}).items()}
 
 
 def raw_enemies_database() -> dict:
@@ -113,8 +106,8 @@ def iter_upgrade_effects(metadata: dict):
         for effect in effects if isinstance(effects, list) else [effects]:
             if isinstance(effect, dict) and "value" in effect:
                 stack = effect.get("stacks")
-                stacking = isinstance(stack, dict)
-                condition = stack.get("when") if stacking else effect.get("when")
+                stacking = isinstance(stack, dict) or isinstance(stack, (int, float)) and not isinstance(stack, bool)
+                condition = stack.get("when") if isinstance(stack, dict) else effect.get("when")
                 yield stat, effect["value"], condition, stacking
             else:
                 yield stat, effect, None, False
@@ -130,14 +123,8 @@ def upgrade_conditions(metadata: dict, *, include_stacking: bool = True) -> list
 
 @lru_cache(maxsize=None)
 def optimizer_excludes_upgrade_by_default(upgrade_name: str) -> bool:
-    if upgrade_name in EXTERNAL_ACTIVATION_UPGRADES_WITHOUT_DATABASE_CONDITIONS:
-        return True
-    metadata = raw_upgrade_metadata(upgrade_name)
-    stats = {normalized_database_key(stat) for stat in (metadata.get("stats") or {})}
-    if stats and stats <= FACTION_DAMAGE_STATS:
-        return True
-    conditions = {normalized_database_key(condition) for condition in upgrade_conditions(metadata) if normalized_database_key(condition) not in AUTOMATIC_CONDITIONS}
-    return any(condition not in WEAPON_ACTIVATED_CONDITIONS for condition in conditions)
+    stats = {normalized_database_key(stat).replace(" ", "_") for stat in (raw_upgrade_metadata(upgrade_name).get("stats") or {})}
+    return upgrade_name in DEFAULT_UPGRADE_BLACKLIST or bool(stats & DEFAULT_FACTION_DAMAGE_STATS)
 
 
 def database_conditional_info(upgrade_name: str | None, *, is_arcane_slot: bool) -> tuple[bool, str]:
@@ -318,7 +305,7 @@ def weapon_compatibility_terms(weapon_category: str, selected_weapon_name: str |
 
 
 def upgrade_incompatibility_names(metadata: dict) -> set[str]:
-    return {str(name) for name in (metadata.get("incompatibility") or []) if name}
+    return {str(name) for name in (metadata.get("conflicts") or metadata.get("incompatibility") or []) if name}
 
 
 def upgrades_are_incompatible(left_name: str, right_name: str) -> bool:
@@ -444,7 +431,7 @@ def weapon_exclusive_stance_names(weapon_name: str | None) -> tuple[str, ...]:
     names = [
         name
         for name, metadata in raw_upgrades_database().items()
-        if bool((metadata.get("compatibility") or {}).get("stance"))
+        if metadata.get("slot") == "stance_mod"
         and wanted in {normalized_database_key(item) for item in ((metadata.get("compatibility") or {}).get("names") or [])}
     ]
     return tuple(sorted(names, key=str.casefold))
@@ -470,9 +457,9 @@ def _upgrade_names_for_ui(weapon_category: str, selected_weapon_name: str | None
         kind = metadata.get("type")
         if not ((include_mods and kind == "mod") or (include_arcanes and kind == "arcane")):
             continue
-        compatibility = metadata.get("compatibility") or {}
-        is_stance = bool(compatibility.get("stance", False))
-        is_exilus = bool(compatibility.get("exilus", False))
+        slot = metadata.get("slot")
+        is_stance = slot == "stance_mod"
+        is_exilus = slot == "exilus_mod"
         if stance_only:
             if not is_stance:
                 continue
@@ -496,13 +483,16 @@ def upgrade_names_for_ui(weapon_category: str, selected_weapon_name: str | None,
 
 
 @lru_cache(maxsize=None)
-def _cached_database_weapon(weapon_name: str, type_filter: str):
-    return arsenal.get(weapon_name, type=type_filter)
+def _cached_database_weapon(weapon_name: str, type_query: str):
+    repository = {"primary": arsenal.primary, "secondary": arsenal.secondary, "melee": arsenal.melee, "archgun": arsenal.archgun}.get(type_query)
+    if repository is None: return None
+    try: return repository.get(weapon_name)
+    except KeyError: return None
 
 
 def database_weapon(weapon_name: str, weapon_type_name: str):
     loaded = _cached_database_weapon(weapon_name, type_query_for_weapon_type(weapon_type_name))
-    return copy.deepcopy(loaded) if isinstance(loaded, tuple(WEAPON_TYPES.values())) else None
+    return loaded.copy() if loaded is not None else None
 
 
 @lru_cache(maxsize=1)
@@ -535,7 +525,8 @@ def enemy_faction_for(enemy_name: str) -> str | None:
 
 @lru_cache(maxsize=None)
 def _cached_database_enemy(enemy_name: str, level: int, steel_path: bool, empowered: bool):
-    return arsenal.get(enemy_name, type="enemy", context={"level": level, "steel_path": steel_path, "empowered": empowered})
+    try: return arsenal.enemy.get(enemy_name).set(level=level, steel_path=steel_path, empowered=empowered)
+    except KeyError: return None
 
 
 def database_enemy(enemy_name: str, *, level: int, steel_path: bool, empowered: bool):
@@ -545,16 +536,14 @@ def database_enemy(enemy_name: str, *, level: int, steel_path: bool, empowered: 
 
 @lru_cache(maxsize=None)
 def _cached_database_upgrade(upgrade_name: str, kind: str | None, rank: int | None, stacks: int | None, condition: bool):
-    metadata = raw_upgrade_metadata(upgrade_name, kind=kind)
-    runtime: dict[str, bool | int] = {}
-    if rank is not None:
-        runtime["rank"] = rank
-    if stacks is not None:
-        runtime["stacks"] = stacks
-    for _stat, _value, when, stacking in iter_upgrade_effects(metadata):
-        if isinstance(when, str) and normalized_database_key(when) not in AUTOMATIC_CONDITIONS:
-            runtime[when] = stacks if stacking and stacks is not None else condition
-    return arsenal.get(upgrade_name, type=kind, context=runtime)
+    repository = arsenal.arcane if kind == "arcane" else arsenal.mod
+    try: item = repository.get(upgrade_name)
+    except KeyError: return None
+    values = {"rank": item.max_rank if rank is None else min(max(int(rank), 0), item.max_rank)}
+    for field in item.stats.manual_fields:
+        values[field] = stacks if stacks is not None else condition
+    item.set(**values)
+    return item
 
 
 def database_upgrade(upgrade_name: str, *, kind: str | None = None, rank: int | None = None, stacks: int | None = None, condition: bool = True):
@@ -566,7 +555,7 @@ def database_rank_bounds(upgrade_name: str | None = None, *, is_arcane_slot: boo
     metadata = raw_upgrade_metadata(upgrade_name or "", kind="arcane" if is_arcane_slot else "mod")
     default = 5 if is_arcane_slot else 10
     raw_max_rank = metadata.get("max_rank")
-    if raw_max_rank is None and bool((metadata.get("compatibility") or {}).get("stance", False)):
+    if raw_max_rank is None and metadata.get("slot") == "stance_mod":
         return 0, 0
     try:
         return 0, max(0, int(default if raw_max_rank is None else raw_max_rank))
@@ -581,7 +570,9 @@ def database_max_stacks(upgrade_name: str | None = None, *, is_arcane_slot: bool
         if stat == "condition_overload":
             continue
         for effect in effects if isinstance(effects, list) else [effects]:
-            maximum = effect.get("stacks", {}).get("max") if isinstance(effect, dict) else None
-            if isinstance(maximum, int):
-                maximums.append(maximum)
+            maximum = effect.get("stacks") if isinstance(effect, dict) else None
+            if isinstance(maximum, dict):
+                maximum = maximum.get("max")
+            if isinstance(maximum, (int, float)) and not isinstance(maximum, bool):
+                maximums.append(int(maximum))
     return max(maximums) if maximums else None

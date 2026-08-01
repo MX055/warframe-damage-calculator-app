@@ -4,16 +4,12 @@ import json
 from collections.abc import Mapping
 from typing import Iterable
 
-from warframe_damage_calculator import Build, Enemy, Upgrade
-from warframe_damage_calculator.core.dist import Dist
+from warframe_damage_calculator import Arcane, Calculator, Dist, Effect, Enemy, Formatter, Loadout, Mod, Progenitor, Upgrade, UpgradeStats
 
-from .constants import (
-    DAMAGE_TYPES,
-    INITIAL_COMBO_RUNTIME,
-    UPGRADE_BOOL_FIELDS,
-    UPGRADE_SCALAR_FIELDS,
-    WEAPON_TYPES,
-)
+class Build(tuple):
+    def __new__(cls, *items): return super().__new__(cls, items)
+
+from .constants import INITIAL_COMBO_RUNTIME, UPGRADE_BOOL_FIELDS, WEAPON_TYPES
 from .data import database_enemy, database_weapon
 from .models import ContributionRow, DamageResultRow, DisplayRow, MetricRow
 
@@ -136,24 +132,19 @@ def build_upgrade(name: str, values: dict[str, float | int]) -> Upgrade:
         else:
             existing.append(effect)
 
-    for field_name in (*DAMAGE_TYPES, *UPGRADE_SCALAR_FIELDS):
-        value = values.get(field_name, 0)
+    for field_name, value in values.items():
+        if field_name in UPGRADE_BOOL_FIELDS:
+            continue
         if field_name == "secondary_enervate":
             value = int(value)
         stat, mode = mode_fields.get(field_name, (field_name, "proportional"))
         add_effect(stat, value, mode)
     for field_name in UPGRADE_BOOL_FIELDS:
         add_effect(field_name, bool(values.get(field_name, False)))
-    return Upgrade(
-        {
-            "name": name,
-            "type": "buff",
-            "max_rank": 0,
-            "compatibility": {},
-            "stats": stats,
-            "runtime": {"rank": 0},
-        }
-    )
+    resolved_stats = {}
+    for stat, effects in stats.items():
+        resolved_stats[stat] = tuple(Effect.from_record(effect) if isinstance(effect, Mapping) else Effect(effect) for effect in effects)
+    return Mod(name=name, stats=UpgradeStats(**resolved_stats))
 
 
 def parse_database_entry(
@@ -206,8 +197,14 @@ def custom_upgrade_from_entry(
         raise ValueError(f"{default_name} stats must be a JSON object.")
     if runtime is not None and not isinstance(runtime, dict):
         raise ValueError(f"{default_name} runtime must be a JSON object.")
-    entry["runtime"] = {**dict(runtime or {}), "rank": int((runtime or {}).get("rank", entry.get("max_rank", 0)))}
-    return Upgrade(entry)
+    runtime_values = {**dict(runtime or {}), "rank": int((runtime or {}).get("rank", entry.get("max_rank", 0)))}
+    kind = str(entry.pop("type", default_type)).casefold()
+    entry.pop("runtime", None)
+    cls = Arcane if kind == "arcane" else Mod
+    upgrade = cls.from_record(entry)
+    allowed_runtime = {key: value for key, value in runtime_values.items() if key == "rank" or key in upgrade.stats.manual_fields}
+    upgrade.set(**allowed_runtime)
+    return upgrade
 
 
 def custom_enemy_from_entry(text: str, *, level: int | None = None, steel_path: bool | None = None, empowered: bool | None = None) -> Enemy:
@@ -296,18 +293,19 @@ def weapon_payload(weapon_type_name: str, base_stats: dict, *, name: str = "") -
 
 
 def is_non_empty_upgrade(item: Upgrade) -> bool:
-    if item.data.stats:
+    if item.stats:
         return True
-    combos = getattr(item.data, "combos", None)
+    combos = getattr(item, "combos", None)
     if combos is not None and len(combos) > 0:
         return True
-    return bool((item.data.compatibility or {}).get("stance"))
+    return getattr(item, "slot", None) == "stance_mod"
 
 
 SPECIAL_STAT_LABELS = {
     "afflictions_proc_multiplier": "Proc Stack Multiplier",
     "cascadia_empowered_proc": "Damage per Status Proc",
     "crit_reset_charges": "Big Critical Hits Before Reset",
+    "crit_tier": "Crit Chance",
     "duplicated_hit": "Duplicate Hit Chance",
     "fire_rate_lock": "Fire Rate Locked",
     "hunter_munitions": "Slash Proc Chance on Critical Hit",
@@ -373,6 +371,49 @@ def behavior_stat_label(field_name: str, behavior: str, behavior_data: Mapping[s
     return base
 
 
+def _effect_condition(value: object) -> str:
+    values = value if isinstance(value, list) else [value]
+    return " and ".join(condition_label(item) for item in values)
+
+
+def effect_context_label(label: str, effect: Mapping[str, object]) -> str:
+    automatic = effect.get("automatic")
+    automatic = automatic if isinstance(automatic, Mapping) else {}
+    on_conditions: list[str] = []
+    per_conditions: list[str] = []
+    qualifiers: list[str] = []
+    stacks = automatic.get("stacks", effect.get("stacks"))
+    if effect.get("when") is not None:
+        (per_conditions if stacks is not None else on_conditions).append(_effect_condition(effect["when"]))
+    if automatic.get("on") is not None:
+        on_conditions.append(_effect_condition(automatic["on"]))
+    if automatic.get("when") is not None:
+        (per_conditions if stacks is not None else on_conditions).append(_effect_condition(automatic["when"]))
+    if automatic.get("with") is not None:
+        per = automatic.get("per")
+        scale = f"{float(per):.0%} " if isinstance(per, (int, float)) and not isinstance(per, bool) else ""
+        per_conditions.append(f"{scale}{_effect_condition(automatic['with'])}")
+    if automatic.get("equipped") is not None:
+        on_conditions.append(f"{_effect_condition(automatic['equipped'])} Equipped")
+    chance = automatic.get("chance")
+    if isinstance(chance, (int, float)) and not isinstance(chance, bool):
+        qualifiers.append(f"{float(chance):.0%} trigger chance")
+    multiply = automatic.get("multiply")
+    if isinstance(multiply, (int, float)) and not isinstance(multiply, bool):
+        qualifiers.append(f"{float(multiply):g}x multiplier")
+    if automatic.get("reset") is not None:
+        reset = _effect_condition(automatic["reset"])
+        qualifiers.append(f"resets at {reset.removeprefix('At ')}")
+    if automatic.get("per") is not None and automatic.get("with") is None:
+        per = automatic["per"]
+        qualifiers.append(f"per {float(per):.0%}" if isinstance(per, (int, float)) and not isinstance(per, bool) else f"per {_effect_condition(per)}")
+    clauses = [*(f"per {condition}" for condition in per_conditions)]
+    if on_conditions:
+        clauses.append(f"on {' and '.join(on_conditions)}")
+    contextual = " ".join([label, *clauses])
+    return f"{contextual} ({', '.join(qualifiers)})" if qualifiers else contextual
+
+
 def format_stat_value(
     value: object,
     *,
@@ -430,6 +471,8 @@ def upgrade_stat_rows(
             rows.append(DisplayRow(label or stat_label(field_name), format_stat_value(value, field_name=field_name)))
 
     def add_effect(field_name: str, raw_effect: object) -> None:
+        if isinstance(raw_effect, Effect):
+            raw_effect = raw_effect.to_record()
         if not isinstance(raw_effect, Mapping) or "value" not in raw_effect:
             add_stat(field_name, raw_effect)
             return
@@ -439,17 +482,12 @@ def upgrade_stat_rows(
         behavior_data = behavior_data if isinstance(behavior_data, Mapping) else {}
         label = behavior_stat_label(field_name, behavior, behavior_data) if behavior else stat_label(field_name)
         mode = normalize_effect_mode(raw_effect.get("mode"))
-        if mode != "proportional":
+        if mode != "proportional" and field_name != "crit_tier":
             label += f" ({field_label(mode)})"
         required_rank = raw_effect.get("rank")
         if required_rank is not None:
             label += f" at Rank {required_rank}"
-        stacks = raw_effect.get("stacks")
-        condition = raw_effect.get("when")
-        if isinstance(stacks, Mapping):
-            label += f" / {condition_label(stacks.get('when', 'stacks'))}"
-        elif condition:
-            label += f" on {condition_label(condition)}"
+        label = effect_context_label(label, raw_effect)
         required_upgrade = raw_effect.get("equipped")
         if required_upgrade:
             required_names = required_upgrade if isinstance(required_upgrade, list) else [required_upgrade]
@@ -457,27 +495,20 @@ def upgrade_stat_rows(
         add_stat(field_name, value, label)
 
     existing_fields = set()
-    for field_name, effects in upgrade.data.stats.items():
+    for field_name, effects in upgrade.stats.items():
         existing_fields.add(field_name)
-        for raw_effect in effects if isinstance(effects, list) else [effects]:
+        for raw_effect in effects if isinstance(effects, (list, tuple)) else [effects]:
             add_effect(field_name, raw_effect)
     for field_name, effects in (extra_stats or {}).items():
         if field_name not in existing_fields:
-            for raw_effect in effects if isinstance(effects, list) else [effects]:
+            for raw_effect in effects if isinstance(effects, (list, tuple)) else [effects]:
                 add_effect(field_name, raw_effect)
     return rows
 
 def progenitor_upgrade(element: str, value: float, no_effect: str) -> Upgrade:
     if element == no_effect or value <= 0:
-        return Upgrade({"name": "Progenitor", "type": "progenitor", "stats": {}, "runtime": {"rank": 0}})
-    return Upgrade(
-        {
-            "name": "Progenitor",
-            "type": "progenitor",
-            "stats": {element: [{"value": value, "mode": "proportional"}]},
-            "runtime": {"rank": 0},
-        }
-    )
+        return Upgrade(name="Progenitor")
+    return Upgrade(name="Progenitor", stats=UpgradeStats(**{element: Effect(value)}))
 
 
 def stance_combo_rows(combos: Mapping[str, object] | None) -> list[DisplayRow]:
@@ -510,65 +541,41 @@ def configured_weapon(
     stance_combo: str | None = None,
     ability_strength: float | None = None,
     target: Enemy | None = None,
+    progenitor: Progenitor | None = None,
 ):
-    weapon_type = WEAPON_TYPES[weapon_type_name]
     if custom_weapon:
         if custom_entry is None:
-            entry = weapon_payload(
-                weapon_type_name,
-                base_stats,
-                name=selected_weapon_name,
-            )
+            entry = weapon_payload(weapon_type_name, base_stats, name=selected_weapon_name)
         else:
-            entry = parse_database_entry(
-                custom_entry,
-                default_name="Custom Weapon",
-                default_type=weapon_type_name.casefold(),
-            )
-        if not isinstance(entry.get("attacks"), dict) or not entry["attacks"]:
-            raise ValueError("Custom Weapon attacks must be a non-empty JSON object.")
-        expected_type = weapon_type_name.casefold()
-        actual_type = str(entry.get("type", "")).casefold()
-        if actual_type != expected_type:
-            raise ValueError(
-                f"Custom Weapon type must be {expected_type!r} for the selected category."
-            )
-        weapon = weapon_type(entry)
+            entry = parse_database_entry(custom_entry, default_name="Custom Weapon", default_type=weapon_type_name.casefold())
+        weapon = WEAPON_TYPES[weapon_type_name].from_record(entry)
     else:
         weapon = database_weapon(selected_weapon_name, weapon_type_name)
         if weapon is None:
             raise LookupError(f"Could not load weapon: {selected_weapon_name}")
 
-    context: dict[str, object] = {}
-    use_initial_combo = combo == INITIAL_COMBO_RUNTIME
+    attack = None
     if selected_mode:
         wanted = "_".join(selected_mode.casefold().replace("-", " ").split())
-        context["attack"] = next(
-            (
-                name
-                for name in weapon.data.attacks
-                if "_".join(name.casefold().replace("-", " ").split()) == wanted
-            ),
-            selected_mode,
-        )
-    if evolutions:
-        context["evolutions"] = evolutions
+        attack = next((name for name in weapon.attacks if "_".join(name.casefold().replace("-", " ").split()) == wanted), None)
+    state: dict[str, object] = dict(runtime_conditions or {})
     if combo is not None:
-        _, max_combo = weapon_combo_rules(weapon)
-        context["combo"] = 1 if use_initial_combo else max(0, min(int(combo), max_combo))
-    if runtime_conditions:
-        context.update(runtime_conditions)
+        state["combo"] = 1 if combo == INITIAL_COMBO_RUNTIME else int(combo)
     if stance_combo:
-        context["stance_combo"] = stance_combo
+        state["stance_combo"] = stance_combo
     if ability_strength is not None:
-        context["ability_strength"] = float(ability_strength)
-    weapon.configure(Build(*upgrades), target=target)
-    if context:
-        weapon.set(context)
-    if use_initial_combo:
-        weapon.set({"combo": combo_multiplier_from_initial_combo(weapon.results.main.effective.initial_combo, weapon)})
-    return weapon
-
+        state["ability_strength"] = float(ability_strength)
+    perks = []
+    for tier, choice in (evolutions or {}).items():
+        if tier in weapon.perk_choices and choice in weapon.perk_choices[tier]:
+            perks.append(weapon.perk_choices[tier][choice])
+    mods = [upgrade for upgrade in upgrades if isinstance(upgrade, Mod)]
+    arcanes = [upgrade for upgrade in upgrades if isinstance(upgrade, Arcane)]
+    loadout = Loadout(mods=mods, arcanes=arcanes, evolutions=perks, progenitor=progenitor)
+    calculator = Calculator(weapon, target, loadout)
+    body_part = next(iter(target.bodyparts), None) if target is not None and target.bodyparts else None
+    result = calculator.resolve(attack=attack, body_part=body_part, state=state)
+    return calculator, result
 
 def contribution_items(contribution_lookup) -> list[tuple[object, float]]:
     if contribution_lookup is None:
@@ -643,39 +650,39 @@ def compute_contribution_proportions(
 
 
 def contribution_lookup_for_weapon(
-    weapon,
+    resolved,
     weapon_type_name: str,
     base_stats: dict | None,
     upgrades: list[Upgrade],
-    target_metric: str = "total_weakpoint_dps",
+    target_metric: str = "total_dps",
 ):
-    """Prefer O(n) removal contributions for the requested result metric; Shapley is too slow for live recalc."""
     if not upgrades:
         return []
-
-    try:
-        removal = getattr(weapon.results, "removal_contributions")
-        items = contribution_items(removal(target=target_metric) if callable(removal) else removal)
+    if isinstance(resolved, tuple) and len(resolved) == 2:
+        calculator, result = resolved
+        metric = target_metric.replace("total_weakpoint_", "total_").replace("flat_weakpoint_", "direct_").replace("total_resistant_", "total_").replace("flat_resistant_", "direct_").replace("flat_", "direct_")
+        full_value = float(getattr(result.aggregate.average, metric))
+        components = [*calculator.loadout.upgrades]
+        if calculator.loadout.progenitor is not None:
+            components.append(calculator.loadout.progenitor)
+        contributions: list[tuple[str, float]] = []
+        for component in components:
+            if isinstance(component, Progenitor):
+                comparison_loadout = Loadout(mods=calculator.loadout.mods, arcanes=calculator.loadout.arcanes, evolutions=calculator.loadout.evolutions)
+                name = f"{component.element.replace('_', ' ').title()} Progenitor ({component.bonus:.0%})"
+            else:
+                comparison_loadout = calculator.loadout - component
+                name = component.name
+            comparison = Calculator(calculator.weapon, calculator.target, comparison_loadout).resolve(attack=result.selected_attack, body_part=result.selected_bodypart, state=result.state)
+            contributions.append((name, full_value - float(getattr(comparison.aggregate.average, metric))))
+        total = sum(value for _, value in contributions) or 1.0
+        return [(name, value / total) for name, value in contributions]
+    removal = getattr(getattr(resolved, "results", None), "removal_contributions", None)
+    if callable(removal):
+        items = contribution_items(removal(target=target_metric))
         total = sum(value for _, value in items) or 1.0
         return [(key, value / total) for key, value in items]
-    except (AttributeError, TypeError):
-        pass
-
-    for attribute_name in (
-        "contribution_proportions",
-        "upgrade_contribution_proportions",
-        "contributions_proportions",
-    ):
-        try:
-            value = getattr(weapon.results, attribute_name)
-            return contribution_items(value() if callable(value) else value)
-        except (AttributeError, TypeError):
-            pass
-
-    if base_stats is None:
-        return []
-    return compute_contribution_proportions(weapon_type_name, base_stats, upgrades, target=weapon.target, target_metric=target_metric)
-
+    return []
 
 def format_contribution(value: float | None) -> str:
     return "—" if value is None else f"{value:.1%}"
@@ -700,81 +707,49 @@ def format_upgrade_contributions(contribution_lookup) -> str:
     )
 
 
-def main_metrics(weapon) -> list[MetricRow]:
-    average = weapon.results.main.final
+def main_metrics(resolved) -> list[MetricRow]:
+    _calculator, result = resolved
+    average = result.aggregate.average
     return [
-        MetricRow("Flat DPH", f"{average.flat_dph:,.2f}"),
-        MetricRow("Flat DOTPH", f"{average.flat_dotph:,.2f}"),
+        MetricRow("Direct DPH", f"{average.direct_dph:,.2f}"),
+        MetricRow("DoT DPH", f"{average.dot_dph:,.2f}"),
         MetricRow("Total DPH", f"{average.total_dph:,.2f}"),
-        MetricRow("Flat DPS", f"{average.flat_dps:,.2f}"),
-        MetricRow("Flat DOTPS", f"{average.flat_dotps:,.2f}"),
+        MetricRow("Direct DPS", f"{average.direct_dps:,.2f}"),
+        MetricRow("DoT DPS", f"{average.dot_dps:,.2f}"),
         MetricRow("Total DPS", f"{average.total_dps:,.2f}"),
     ]
 
 
-def weakpoint_metrics(weapon) -> list[MetricRow]:
-    average = weapon.results.main.final
-    return [
-        MetricRow("Flat Weakpoint DPH", f"{average.flat_weakpoint_dph:,.2f}"),
-        MetricRow("Flat Weakpoint DOTPH", f"{average.flat_weakpoint_dotph:,.2f}"),
-        MetricRow("Total Weakpoint DPH", f"{average.total_weakpoint_dph:,.2f}"),
-        MetricRow("Flat Weakpoint DPS", f"{average.flat_weakpoint_dps:,.2f}"),
-        MetricRow("Flat Weakpoint DOTPS", f"{average.flat_weakpoint_dotps:,.2f}"),
-        MetricRow("Total Weakpoint DPS", f"{average.total_weakpoint_dps:,.2f}"),
-    ]
+def weakpoint_metrics(resolved) -> list[MetricRow]:
+    return []
 
 
-def resistant_metrics(weapon) -> list[MetricRow]:
-    average = weapon.results.main.final
-    return [
-        MetricRow("Flat Resistant DPH", f"{average.flat_resistant_dph:,.2f}"),
-        MetricRow("Flat Resistant DOTPH", f"{average.flat_resistant_dotph:,.2f}"),
-        MetricRow("Total Resistant DPH", f"{average.total_resistant_dph:,.2f}"),
-        MetricRow("Flat Resistant DPS", f"{average.flat_resistant_dps:,.2f}"),
-        MetricRow("Flat Resistant DOTPS", f"{average.flat_resistant_dotps:,.2f}"),
-        MetricRow("Total Resistant DPS", f"{average.total_resistant_dps:,.2f}"),
-    ]
+def resistant_metrics(resolved) -> list[MetricRow]:
+    return []
 
 
-def ranged_misc_metrics(weapon) -> list[MetricRow]:
-    selected = weapon.results.main
-    return [
-        MetricRow("Average Fire Rate", f"{selected.final.fire_rate:,.2f}"),
-        MetricRow("Procs / Shot", f"{selected.average.procs_per_shot:,.2f}"),
-    ]
+def ranged_misc_metrics(resolved) -> list[MetricRow]:
+    _calculator, result = resolved
+    selected = result.attacks[result.selected_attack].average
+    return [MetricRow("Average Fire Rate", f"{selected.fire_rate:,.2f}"), MetricRow("Procs / Shot", f"{sum(selected.status_chance for _ in [0]):,.2f}")]
 
 
-def effective_damage_rows(weapon, *, melee: bool) -> list[DamageResultRow]:
-    selected = weapon.results.main
-    if melee:
-        return [
-            DamageResultRow(
-                damage_type=damage_type.title(),
-                damage=f"{damage:,.2f}",
-                weight=f"{selected.effective.damage.weight(damage_type):,.2f}",
-                proc_chance=(
-                    f"{selected.effective.damage.weight(damage_type) * selected.effective.status_chance:.1%}"
-                ),
-            )
-            for damage_type, damage in selected.effective.damage
-        ]
-
-    related = weapon.results.child
-    related_damage = Dist()
-    for child in related:
-        related_damage += child.effective.damage
-    combined = selected.effective.damage + related_damage
+def effective_damage_rows(resolved, *, melee: bool) -> list[DamageResultRow]:
+    _calculator, result = resolved
+    selected = result.attacks[result.selected_attack]
+    damage = selected.effective.damage
     return [
         DamageResultRow(
             damage_type=damage_type.title(),
-            damage=f"{damage:,.2f}",
-            direct_weight=(
-                f"{selected.effective.damage.weight(damage_type):,.2f}"
-            ),
-            explosion_weight=f"{related_damage.weight(damage_type):,.2f}",
-            proc_chance=(
-                f"{selected.effective.damage.weight(damage_type) * selected.effective.status_chance:.1%}"
-            ),
+            damage=f"{value:,.2f}",
+            weight=f"{damage.weight(damage_type):,.2f}" if melee else "",
+            direct_weight="" if melee else f"{damage.weight(damage_type):,.2f}",
+            explosion_weight="" if melee else "0.00",
+            proc_chance=f"{damage.weight(damage_type) * selected.effective.status_chance:.1%}",
         )
-        for damage_type, damage in combined
+        for damage_type, value in damage.items()
     ]
+
+
+def result_summary(resolved) -> str:
+    return Formatter(resolved[1]).summary()
