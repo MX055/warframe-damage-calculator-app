@@ -54,14 +54,14 @@ def test_app_uses_library_optimizer_class():
 
 def test_optimized_runtime_stacks_are_preserved(monkeypatch):
     galvanized = arsenal.mod.get("Galvanized Aptitude").set(rank=10, kill=2)
-    deadhead = arsenal.arcane.get("Primary Deadhead").set(rank=5, headshot_kill=3)
+    compression = arsenal.arcane.get("Primary Compression").set(rank=5, aim=True)
 
     class FakeOptimizer:
         def __init__(self, calculator):
             pass
 
         def resolve(self, metric, **kwargs):
-            return SimpleNamespace(loadout=Loadout(mods=[galvanized], arcanes=[deadhead]), score=1.0, evaluations=12, elapsed=0.01, summary={"budget_exhausted": False})
+            return SimpleNamespace(loadout=Loadout(mods=[galvanized], arcanes=[compression]), score=1.0, evaluations=12, elapsed=0.01, summary={"budget_exhausted": False})
 
     monkeypatch.setattr(app_optimizer, "Optimizer", FakeOptimizer)
     request = app_optimizer.OptimizeRequest(
@@ -87,8 +87,9 @@ def test_optimized_runtime_stacks_are_preserved(monkeypatch):
 
     assert result.slot_names[1] == "Galvanized Aptitude"
     assert result.slot_stacks[1] == 2
-    assert result.slot_names[10] == "Primary Deadhead"
-    assert result.slot_stacks[10] == 3
+    assert result.slot_conditions[1] is False
+    assert result.slot_names[10] == "Primary Compression"
+    assert result.slot_conditions[10] is True
 
 
 def test_riven_damage_bonus_uses_the_editor_field_name():

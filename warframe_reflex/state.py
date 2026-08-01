@@ -1875,6 +1875,7 @@ class CalculatorState(rx.State):
         self.slot_selected_upgrades = list(result.slot_names)
         self.slot_ranks = list(result.slot_ranks)
         self.slot_stacks = list(result.slot_stacks)
+        self.slot_conditions_enabled = list(result.slot_conditions)
         self.slot_policies = list(result.slot_policies)
         self.slot_riven_rolls = list(result.riven_rolls)
         self.custom_upgrade_entries = list(result.custom_entries)

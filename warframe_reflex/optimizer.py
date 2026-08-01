@@ -76,6 +76,7 @@ class OptimizeResult:
     slot_names: list[str]
     slot_ranks: list[int]
     slot_stacks: list[int]
+    slot_conditions: list[bool]
     slot_policies: list[str]
     riven_rolls: list[str]
     riven_fields: list[dict[str, float]]
@@ -191,6 +192,10 @@ def _runtime_stacks(upgrade: Mod | Arcane) -> int:
     return max(numeric, default=0)
 
 
+def _runtime_condition(upgrade: Mod | Arcane) -> bool:
+    return any(getattr(upgrade.runtime, field) is True for field in upgrade.stats.manual_fields)
+
+
 def _riven_roll(mod: Mod) -> str:
     values = _riven_fields(mod).values()
     shape = (sum(value > 0 for value in values), sum(value < 0 for value in values))
@@ -217,6 +222,7 @@ def optimize_build(request: OptimizeRequest, progress: ProgressCallback | None =
     names = [NONE for _ in SLOT_CONFIGS]
     ranks = [0 for _ in SLOT_CONFIGS]
     stacks = [0 for _ in SLOT_CONFIGS]
+    conditions = [False for _ in SLOT_CONFIGS]
     policies = [SLOT_POLICY_DISCARD for _ in SLOT_CONFIGS]
     rolls = ["2 Positive + 1 Negative" for _ in SLOT_CONFIGS]
     riven_fields = [{} for _ in SLOT_CONFIGS]
@@ -239,6 +245,7 @@ def optimize_build(request: OptimizeRequest, progress: ProgressCallback | None =
         else: names[index] = item.name
         ranks[index] = int(item.runtime.rank)
         stacks[index] = _runtime_stacks(item)
+        conditions[index] = _runtime_condition(item)
 
     for spec in fixed_specs:
         item = _load_slot(spec)
@@ -251,4 +258,4 @@ def optimize_build(request: OptimizeRequest, progress: ProgressCallback | None =
 
     perk_selection = _perk_map(weapon, optimization.loadout.evolutions)
     progenitor_element = optimization.loadout.progenitor.element.title() if optimization.loadout.progenitor else NO_EFFECT
-    return OptimizeResult(names, ranks, stacks, policies, rolls, riven_fields, customs, optimization.score, optimization.evaluations, f"Optimization completed in {optimization.elapsed:.1f}s.", perk_selection, request.find_optimal_evolutions, progenitor_element, request.find_optimal_progenitor, request.search_quality, "budget exhausted" if optimization.summary and optimization.summary.get("budget_exhausted") else "converged", optimization.elapsed)
+    return OptimizeResult(names, ranks, stacks, conditions, policies, rolls, riven_fields, customs, optimization.score, optimization.evaluations, f"Optimization completed in {optimization.elapsed:.1f}s.", perk_selection, request.find_optimal_evolutions, progenitor_element, request.find_optimal_progenitor, request.search_quality, "budget exhausted" if optimization.summary and optimization.summary.get("budget_exhausted") else "converged", optimization.elapsed)
