@@ -673,7 +673,7 @@ def contribution_lookup_for_weapon(
             else:
                 comparison_loadout = calculator.loadout - component
                 name = component.name
-            comparison = Calculator(calculator.weapon, calculator.target, comparison_loadout).resolve(attack=result.selected_attack, body_part=result.selected_bodypart, state=result.state)
+            comparison = Calculator(calculator.weapon.copy(), calculator.target, comparison_loadout).resolve(attack=result.selected_attack, body_part=result.selected_bodypart, state=result.state)
             contributions.append((name, full_value - float(getattr(comparison.aggregate.average, metric))))
         total = sum(value for _, value in contributions) or 1.0
         return [(name, value / total) for name, value in contributions]
@@ -753,3 +753,7 @@ def effective_damage_rows(resolved, *, melee: bool) -> list[DamageResultRow]:
 
 def result_summary(resolved) -> str:
     return Formatter(resolved[1]).summary()
+
+
+def result_contributions_summary(resolved) -> str:
+    return Formatter(resolved[1]).contributions()

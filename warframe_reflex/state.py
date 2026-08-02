@@ -85,7 +85,6 @@ from .engine import (
     effective_damage_rows,
     field_label,
     format_contribution,
-    format_upgrade_contributions,
     is_field_allowed,
     is_non_empty_upgrade,
     main_metrics,
@@ -95,6 +94,7 @@ from .engine import (
     progenitor_upgrade,
     ranged_misc_metrics,
     result_summary,
+    result_contributions_summary,
     resistant_metrics,
     upgrade_field_input_config,
     upgrade_stat_rows,
@@ -2691,12 +2691,7 @@ class CalculatorState(rx.State):
                 "External Buffs",
                 self.external_fields,
             )
-            upgrades: list[Upgrade] = []
-            upgrades.extend(
-                upgrade
-                for upgrade in slot_upgrades
-                if is_non_empty_upgrade(upgrade)
-            )
+            upgrades = [upgrade for selected, upgrade in zip(self.slot_selected_upgrades, slot_upgrades) if selected != NONE]
             if is_non_empty_upgrade(external):
                 upgrades.append(external)
 
@@ -2753,9 +2748,7 @@ class CalculatorState(rx.State):
             )
             self.contribution_result_rows = contribution_rows(contribution_lookup)
             self.result_summary = result_summary(weapon)
-            self.result_contribution_summary = format_upgrade_contributions(
-                contribution_lookup
-            )
+            self.result_contribution_summary = result_contributions_summary(weapon)
             self.result_error = ""
             self.result_errors = []
             self.result_ready = True

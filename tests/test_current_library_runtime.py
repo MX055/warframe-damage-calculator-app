@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 from warframe_damage_calculator import Arcane, Mod
 from warframe_damage_calculator.optimizer.candidates import DEFAULT_UPGRADE_BLACKLIST
 
@@ -120,3 +122,34 @@ def test_custom_upgrade_preserves_riven_only_stats():
 
     assert upgrade.stats.punch_through[0].value == 2.5
     assert upgrade.stats.status_duration[0].value == -0.4
+
+
+def test_optimizer_application_keeps_statless_special_upgrades():
+    state = CalculatorState(_reflex_internal_init=True)
+    state.initialize()
+    state.set_weapon_type("Rifle")
+    state.set_weapon("Kuva Ogris")
+    state.set_enemy_faction("grineer")
+    state.set_enemy("Exo Gokstad Officer")
+    state.set_enemy_level("235")
+    state.set_enemy_toggle("enemy_steel_path", True)
+    state.set_progenitor_element("heat")
+    state.progenitor_value = 0.6
+    result = SimpleNamespace(
+        slot_names=["Primed Stabilizer", "Nightwatch Napalm", "Galvanized Aptitude", "Continuous Misery", "Hellfire", "Rime Rounds", "Malignant Force", "Galvanized Chamber", "Rifle Elementalist", "None", "Primary Compression"],
+        slot_ranks=[10, 5, 10, 3, 5, 3, 3, 10, 5, 0, 5],
+        slot_stacks=[0, 0, 2, 0, 0, 0, 0, 5, 0, 0, 0],
+        slot_conditions=[False] * 10 + [True],
+        slot_policies=["discard"] * 11,
+        riven_rolls=["2 Positive + 1 Negative"] * 11,
+        riven_fields=[{} for _ in range(11)],
+        custom_entries=[""] * 11,
+        progenitor_optimized=False,
+        evolutions_optimized=False,
+    )
+
+    state._apply_optimize_result(result)
+    state._recalculate()
+
+    assert next(row.value for row in state.main_result_metrics if row.label == "Total DPS") == "1,577,486.46"
+    assert "Nightwatch Napalm" in state.result_contribution_summary
