@@ -150,6 +150,7 @@ def test_optimizer_application_keeps_statless_special_upgrades():
 
     state._apply_optimize_result(result)
     state._recalculate()
+    state._apply_contribution_summary_sync()
 
     assert next(row.value for row in state.main_result_metrics if row.label == "Total DPS") == "1,577,486.46"
     assert "Nightwatch Napalm" in state.result_contribution_summary

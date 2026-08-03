@@ -54,7 +54,7 @@ from .data import (
     raw_riven_stats_database,
     raw_upgrade_metadata,
     raw_weapon_metadata,
-    upgrade_conflicts_with_selected,
+    upgrades_blocked_by_selected,
     preferred_exclusive_stance,
     selected_attack_category,
     stance_combo_key_for_attack_category,
@@ -403,6 +403,8 @@ class CalculatorState(rx.State):
     contribution_result_rows: list[ContributionRow] = rx.field(default_factory=list)
     result_summary: str = ""
     result_contribution_summary: str = ""
+    contribution_revision: int = 0
+    contributions_pending: bool = False
     result_error: str = ""
     result_errors: list[str] = rx.field(default_factory=list)
     result_ready: bool = False
@@ -580,7 +582,7 @@ class CalculatorState(rx.State):
         self._refresh_all_riven_field_limits()
         self._refresh_damage_options()
         self._refresh_all_field_options()
-        self._recalculate()
+        return self._recalculate()
 
     @rx.event
     def set_weapon_type(self, value: str):
@@ -601,7 +603,7 @@ class CalculatorState(rx.State):
         self._filter_disallowed_custom_fields()
         self._refresh_all_riven_field_limits()
         self._refresh_all_field_options()
-        self._recalculate()
+        return self._recalculate()
 
     @rx.event
     def set_weapon_select_open(self, value: bool):
@@ -623,7 +625,7 @@ class CalculatorState(rx.State):
             self.selected_enemy = NONE
         if self.selected_enemy != previous:
             self._invalidate_optimizer_result()
-            self._recalculate()
+            return self._recalculate()
 
     @rx.event
     def set_weapon(self, value: str):
@@ -638,26 +640,26 @@ class CalculatorState(rx.State):
         self._refresh_upgrade_options()
         self._refresh_all_riven_field_limits()
         self._refresh_slot_field_options()
-        self._recalculate()
+        return self._recalculate()
 
     @rx.event
     def set_enemy(self, value: str):
         self.enemy_select_open = False
         self.selected_enemy = value if value in self.enemy_options else NONE
         self._invalidate_optimizer_result()
-        self._recalculate()
+        return self._recalculate()
 
     @rx.event
     def set_custom_enemy_entry(self, value: str):
         self.custom_enemy_entry = value
         self._invalidate_optimizer_result()
-        self._recalculate()
+        return self._recalculate()
 
     @rx.event
     def set_enemy_level(self, value: str):
         self.enemy_level = max(1, min(parse_int(value, self.enemy_level), 9999))
         self._invalidate_optimizer_result()
-        self._recalculate()
+        return self._recalculate()
 
     @rx.event
     def set_enemy_toggle(self, field_name: str, value: bool):
@@ -665,7 +667,7 @@ class CalculatorState(rx.State):
             return
         setattr(self, field_name, bool(value))
         self._invalidate_optimizer_result()
-        self._recalculate()
+        return self._recalculate()
 
 
     @rx.event
@@ -678,7 +680,7 @@ class CalculatorState(rx.State):
         self._refresh_upgrade_options()
         self._refresh_all_riven_field_limits()
         self._refresh_slot_field_options()
-        self._recalculate()
+        return self._recalculate()
 
     @rx.event
     def set_evolution(self, index: int, value: str):
@@ -689,7 +691,7 @@ class CalculatorState(rx.State):
         self.evolution_selections = selections
         self._refresh_evolution_runtime_controls()
         self._invalidate_optimizer_result()
-        self._recalculate()
+        return self._recalculate()
 
     @rx.event
     def set_melee_combo_count(self, value: str):
@@ -697,7 +699,7 @@ class CalculatorState(rx.State):
             return
         self.melee_combo_count = value
         self._invalidate_optimizer_result()
-        self._recalculate()
+        return self._recalculate()
 
     @rx.event
     def set_evolution_condition(self, name: str, value: bool):
@@ -707,8 +709,7 @@ class CalculatorState(rx.State):
                 field.value = bool(value)
                 self.evolution_condition_toggles = fields
                 self._invalidate_optimizer_result()
-                self._recalculate()
-                return
+                return self._recalculate()
 
     @rx.event
     def set_evolution_stacks(self, name: str, value: str):
@@ -718,14 +719,13 @@ class CalculatorState(rx.State):
                 field.value = value
                 self.evolution_stack_fields = fields
                 self._invalidate_optimizer_result()
-                self._recalculate()
-                return
+                return self._recalculate()
 
     @rx.event
     def set_progenitor_element(self, value: str):
         self.progenitor_element = value
         self._invalidate_optimizer_result()
-        self._recalculate()
+        return self._recalculate()
 
     @rx.event
     def set_base_number(self, field_name: str, value: str):
@@ -738,7 +738,7 @@ class CalculatorState(rx.State):
         parsed = clamp_number(float(parsed), minimum, maximum)
         setattr(self, field_name, int(parsed) if integer else float(parsed))
         self._invalidate_optimizer_result()
-        self._recalculate()
+        return self._recalculate()
 
     @rx.event
     def set_base_toggle(self, field_name: str, value: bool):
@@ -752,7 +752,7 @@ class CalculatorState(rx.State):
         setattr(self, field_name, bool(value))
         self._invalidate_optimizer_result()
         self._refresh_upgrade_options()
-        self._recalculate()
+        return self._recalculate()
 
     @rx.event
     def set_damage_pending(self, group: str, value: str):
@@ -773,7 +773,7 @@ class CalculatorState(rx.State):
         self._set_damage_fields(group, fields)
         self._refresh_damage_options()
         self._invalidate_optimizer_result()
-        self._recalculate()
+        return self._recalculate()
 
     @rx.event
     def remove_damage_type(self, group: str, damage_name: str):
@@ -785,7 +785,7 @@ class CalculatorState(rx.State):
         self._set_damage_fields(group, fields)
         self._refresh_damage_options()
         self._invalidate_optimizer_result()
-        self._recalculate()
+        return self._recalculate()
 
     @rx.event
     def set_damage_value(self, group: str, damage_name: str, value: str):
@@ -796,7 +796,7 @@ class CalculatorState(rx.State):
                 break
         self._set_damage_fields(group, fields)
         self._invalidate_optimizer_result()
-        self._recalculate()
+        return self._recalculate()
 
     @rx.event
     def toggle_slot_editor(self, index: int):
@@ -829,7 +829,7 @@ class CalculatorState(rx.State):
         self._refresh_upgrade_options()
         self._refresh_all_riven_field_limits()
         self._refresh_all_field_options()
-        self._recalculate()
+        return self._recalculate()
 
     @rx.event
     def remove_build_upgrade(self, index: int):
@@ -843,7 +843,7 @@ class CalculatorState(rx.State):
         self._refresh_upgrade_options()
         self._refresh_all_riven_field_limits()
         self._refresh_all_field_options()
-        self._recalculate()
+        return self._recalculate()
 
     @rx.event
     def set_slot_upgrade(self, index: int, value: str):
@@ -865,8 +865,7 @@ class CalculatorState(rx.State):
             self._refresh_slot_upgrade_options()
             self._refresh_slot_condition_metadata()
             self._refresh_slot_field_options()
-            self._recalculate()
-            return
+            return self._recalculate()
         if previous == NONE or value in self.optimize_excluded_upgrades:
             policies[index] = SLOT_POLICY_DISCARD
             self.slot_policies = policies
@@ -909,7 +908,7 @@ class CalculatorState(rx.State):
         self._refresh_slot_upgrade_options()
         self._refresh_slot_condition_metadata()
         self._refresh_slot_field_options()
-        self._recalculate()
+        return self._recalculate()
 
     @rx.event
     def set_stance_combo(self, value: str):
@@ -917,7 +916,7 @@ class CalculatorState(rx.State):
             return
         self.selected_stance_combo = value
         self._invalidate_optimizer_result()
-        self._recalculate()
+        return self._recalculate()
 
     @rx.event
     def set_slot_policy(self, index: int, value: str):
@@ -1052,7 +1051,7 @@ class CalculatorState(rx.State):
         if value in self.optimize_body_part_options:
             self.optimize_body_part = value
             self._invalidate_optimizer_result()
-            self._recalculate()
+            return self._recalculate()
 
     @rx.event
     def set_optimize_flat_dot_weight(self, value: str | int | float):
@@ -1235,6 +1234,7 @@ class CalculatorState(rx.State):
                         self.optimize_progress_width = f"{self.optimize_progress:.1f}%"
                         self.optimize_evaluations = result.evaluations
                 await asyncio.sleep(0)
+                refresh = None
                 try:
                     async with self:
                         if self.optimize_revision == revision:
@@ -1242,7 +1242,7 @@ class CalculatorState(rx.State):
                                 self._ensure_selected_upgrades_in_options()
                                 self._refresh_all_riven_field_limits()
                                 self._refresh_slot_field_options()
-                                self._recalculate()
+                                refresh = self._recalculate()
                                 self.optimize_phase = "Complete"
                                 self.optimize_elapsed = _format_elapsed(result.elapsed_seconds)
                             except Exception as exc:
@@ -1256,7 +1256,7 @@ class CalculatorState(rx.State):
                         if self.optimize_cancel_token == cancel_token:
                             self.optimize_cancel_token = ""
                 await fut
-                return
+                return refresh
             if terminal[0] == "error":
                 exc = terminal[1]
                 async with self:
@@ -1290,7 +1290,7 @@ class CalculatorState(rx.State):
         enabled[index] = bool(value)
         self.slot_conditions_enabled = enabled
         self._invalidate_optimizer_result()
-        self._recalculate()
+        return self._recalculate()
 
     @rx.event
     def set_slot_rank(self, index: int, value: str):
@@ -1300,7 +1300,7 @@ class CalculatorState(rx.State):
         ranks[index] = max(0, min(parse_int(value, ranks[index]), self.slot_max_ranks[index]))
         self.slot_ranks = ranks
         self._invalidate_optimizer_result()
-        self._recalculate()
+        return self._recalculate()
 
     @rx.event
     def set_slot_stacks(self, index: int, value: str):
@@ -1313,7 +1313,7 @@ class CalculatorState(rx.State):
         )
         self.slot_stacks = stacks
         self._invalidate_optimizer_result()
-        self._recalculate()
+        return self._recalculate()
 
     @rx.event
     def set_slot_pending_field(self, index: int, value: str):
@@ -1348,7 +1348,7 @@ class CalculatorState(rx.State):
         self.slot_fields = all_fields
         self._invalidate_optimizer_result()
         self._refresh_slot_field_options()
-        self._recalculate()
+        return self._recalculate()
 
     @rx.event
     def set_riven_roll(self, index: int, value: str):
@@ -1367,7 +1367,7 @@ class CalculatorState(rx.State):
         self.slot_fields = all_fields
         self._invalidate_optimizer_result()
         self._refresh_slot_field_options()
-        self._recalculate()
+        return self._recalculate()
 
     @rx.event
     def add_slot_field(self, index: int):
@@ -1401,8 +1401,7 @@ class CalculatorState(rx.State):
             self.slot_fields = all_fields
             self._invalidate_optimizer_result()
             self._refresh_slot_field_options()
-            self._recalculate()
-            return
+            return self._recalculate()
         config = SLOT_CONFIGS[index]
         min_value, max_value, default_value, integer = upgrade_field_input_config(
             config["options"].get(field_name),
@@ -1421,7 +1420,7 @@ class CalculatorState(rx.State):
         self.slot_fields = all_fields
         self._invalidate_optimizer_result()
         self._refresh_slot_field_options()
-        self._recalculate()
+        return self._recalculate()
 
     @rx.event
     def remove_slot_field(self, index: int, field_name: str):
@@ -1433,7 +1432,7 @@ class CalculatorState(rx.State):
         self._invalidate_optimizer_result()
         self._refresh_riven_field_limits(index)
         self._refresh_slot_field_options()
-        self._recalculate()
+        return self._recalculate()
 
     @rx.event
     def set_slot_field_value(self, index: int, field_name: str, value: str):
@@ -1448,7 +1447,7 @@ class CalculatorState(rx.State):
                 break
         self.slot_fields = all_fields
         self._invalidate_optimizer_result()
-        self._recalculate()
+        return self._recalculate()
 
     @rx.event
     def set_external_pending_field(self, value: str):
@@ -1477,7 +1476,7 @@ class CalculatorState(rx.State):
         self.external_fields = fields
         self._invalidate_optimizer_result()
         self._refresh_external_field_options()
-        self._recalculate()
+        return self._recalculate()
 
     @rx.event
     def remove_external_field(self, field_name: str):
@@ -1489,7 +1488,7 @@ class CalculatorState(rx.State):
         self.clear_keep_buff_fields = [name for name in self.clear_keep_buff_fields if name != field_name]
         self._invalidate_optimizer_result()
         self._refresh_external_field_options()
-        self._recalculate()
+        return self._recalculate()
 
     @rx.event
     def set_external_field_value(self, field_name: str, value: str):
@@ -1502,7 +1501,7 @@ class CalculatorState(rx.State):
                 break
         self.external_fields = fields
         self._invalidate_optimizer_result()
-        self._recalculate()
+        return self._recalculate()
 
     def _refresh_enemy_options(self):
         factions = list(enemy_faction_options())
@@ -1803,17 +1802,8 @@ class CalculatorState(rx.State):
                 if other_index != index and upgrade != NONE
             }
             current = selected[index]
-            filtered = []
-            for upgrade in base_options:
-                if upgrade == NONE or upgrade == current:
-                    filtered.append(upgrade)
-                    continue
-                if upgrade in selected_elsewhere:
-                    continue
-                if upgrade_conflicts_with_selected(upgrade, selected_elsewhere):
-                    continue
-                filtered.append(upgrade)
-            options.append(filtered)
+            blocked = upgrades_blocked_by_selected(selected_elsewhere)
+            options.append([upgrade for upgrade in base_options if upgrade == NONE or upgrade == current or upgrade not in blocked])
         self.slot_upgrade_options = options
 
     def _refresh_slot_condition_metadata(self):
@@ -2314,19 +2304,116 @@ class CalculatorState(rx.State):
         self.contribution_result_rows = []
         self.result_summary = ""
         self.result_contribution_summary = ""
+        self.contribution_revision += 1
+        self.contributions_pending = False
         self.result_ready = False
+
+    def _build_resolved_weapon(self, target):
+        slot_upgrades = [self._slot_upgrade(index) for index in range(len(SLOT_CONFIGS))]
+        progenitor = None if not self._supports_progenitor() or self.progenitor_element == NO_EFFECT or self.progenitor_value <= 0 else Progenitor(self.progenitor_element, self.progenitor_value)
+        external = self._custom_upgrade_from_fields("External Buffs", self.external_fields)
+        upgrades = [upgrade for selected, upgrade in zip(self.slot_selected_upgrades, slot_upgrades) if selected != NONE]
+        if is_non_empty_upgrade(external):
+            upgrades.append(external)
+        weapon = configured_weapon(
+            self.selected_weapon_type,
+            self.selected_weapon,
+            upgrades=upgrades,
+            selected_mode=self.selected_attack_mode or None,
+            evolutions=self._selected_evolutions(),
+            combo=self._combo_runtime_value() if self.melee_weapon else None,
+            runtime_conditions=self._evolution_runtime_context(),
+            stance_combo=self.selected_stance_combo if self.stance_combo_available else None,
+            ability_strength=self._ability_strength_multiplier(),
+            target=target,
+            progenitor=progenitor,
+        )
+        return weapon, upgrades, slot_upgrades
+
+    def _target_for_calculation(self):
+        target = self._target_enemy()
+        self._refresh_enemy_preview(target)
+        if target is not None and self.optimize_body_part:
+            if self.optimize_body_part not in target.bodyparts:
+                raise ValueError(f"Unknown body part: {self.optimize_body_part}")
+            target = target.copy()
+            target.bodyparts = {self.optimize_body_part: target.bodyparts[self.optimize_body_part]}
+        return target
+
+    def _apply_contribution_summary_sync(self):
+        """Compute contribution UI immediately (tests / non-UI callers)."""
+        if not self.result_ready or self.selected_weapon == NONE or self.no_enemy:
+            self.result_contribution_summary = ""
+            self.contributions_pending = False
+            return
+        target = self._target_for_calculation()
+        resolved, upgrades, _slot_upgrades = self._build_resolved_weapon(target)
+        contribution_lookup = contribution_lookup_for_weapon(resolved, self.selected_weapon_type, None, upgrades, target_metric="total_dps")
+        contribution_map = contribution_lookup_map(contribution_lookup)
+        contributions = []
+        for index, config in enumerate(SLOT_CONFIGS):
+            selected = self.slot_selected_upgrades[index]
+            contribution_name = config["label"] if selected == NONE else selected
+            contributions.append(format_contribution(contribution_value_for_name(contribution_map, contribution_name)))
+        self.slot_contributions = contributions
+        self.contribution_result_rows = contribution_rows(contribution_lookup)
+        self.result_contribution_summary = result_contributions_summary(resolved)
+        self.contributions_pending = False
+
+    @rx.event(background=True)
+    async def refresh_contribution_summary(self):
+        import asyncio
+
+        async with self:
+            revision = self.contribution_revision
+            if not self.result_ready or self.selected_weapon == NONE or self.no_enemy:
+                self.contributions_pending = False
+                return
+            selected_upgrades = list(self.slot_selected_upgrades)
+            weapon_type = self.selected_weapon_type
+            try:
+                target = self._target_for_calculation()
+                resolved, upgrades, _slot_upgrades = self._build_resolved_weapon(target)
+            except Exception as exc:
+                if self.contribution_revision == revision:
+                    self.result_contribution_summary = f"{type(exc).__name__}: {exc}"
+                    self.contributions_pending = False
+                return
+
+        def compute():
+            lookup = contribution_lookup_for_weapon(resolved, weapon_type, None, upgrades, target_metric="total_dps")
+            text = result_contributions_summary(resolved)
+            return lookup, text
+
+        loop = asyncio.get_running_loop()
+        try:
+            contribution_lookup, text = await loop.run_in_executor(None, compute)
+        except Exception as exc:
+            async with self:
+                if self.contribution_revision == revision:
+                    self.result_contribution_summary = f"{type(exc).__name__}: {exc}"
+                    self.contributions_pending = False
+            return
+
+        contribution_map = contribution_lookup_map(contribution_lookup)
+        contributions = []
+        for index, config in enumerate(SLOT_CONFIGS):
+            selected = selected_upgrades[index]
+            contribution_name = config["label"] if selected == NONE else selected
+            contributions.append(format_contribution(contribution_value_for_name(contribution_map, contribution_name)))
+        rows = contribution_rows(contribution_lookup)
+        async with self:
+            if self.contribution_revision == revision:
+                self.slot_contributions = contributions
+                self.contribution_result_rows = rows
+                self.result_contribution_summary = text
+                self.contributions_pending = False
 
     def _recalculate(self):
         try:
             configuration_errors: list[str] = []
             try:
-                target = self._target_enemy()
-                self._refresh_enemy_preview(target)
-                if target is not None and self.optimize_body_part:
-                    if self.optimize_body_part not in target.bodyparts:
-                        raise ValueError(f"Unknown body part: {self.optimize_body_part}")
-                    target = target.copy()
-                    target.bodyparts = {self.optimize_body_part: target.bodyparts[self.optimize_body_part]}
+                target = self._target_for_calculation()
             except Exception as exc:
                 self.enemy_identity_rows = []
                 self.enemy_bodypart_rows = []
@@ -2342,90 +2429,42 @@ class CalculatorState(rx.State):
                 self._clear_calculation_results()
                 self.result_errors = configuration_errors
                 self.result_error = "\n".join(configuration_errors)
-                return
+                return None
             if self.selected_weapon == NONE:
                 slot_upgrades = [self._slot_upgrade(index) for index in range(len(SLOT_CONFIGS))]
-                self.slot_stat_rows = [
-                    self._slot_preview_rows(index, upgrade)
-                    for index, upgrade in enumerate(slot_upgrades)
-                ]
+                self.slot_stat_rows = [self._slot_preview_rows(index, upgrade) for index, upgrade in enumerate(slot_upgrades)]
                 self._clear_calculation_results()
                 self.result_error = "Select a weapon to calculate."
                 self.result_errors = [self.result_error]
-                return
+                return None
 
-            slot_upgrades = [
-                self._slot_upgrade(index) for index in range(len(SLOT_CONFIGS))
-            ]
-            self.slot_stat_rows = [
-                self._slot_preview_rows(index, upgrade)
-                for index, upgrade in enumerate(slot_upgrades)
-            ]
             if self.no_enemy:
+                slot_upgrades = [self._slot_upgrade(index) for index in range(len(SLOT_CONFIGS))]
+                self.slot_stat_rows = [self._slot_preview_rows(index, upgrade) for index, upgrade in enumerate(slot_upgrades)]
                 self._clear_calculation_results()
                 self.result_error = "Select an enemy to calculate."
                 self.result_errors = [self.result_error]
-                return
-            progenitor = None if not self._supports_progenitor() or self.progenitor_element == NO_EFFECT or self.progenitor_value <= 0 else Progenitor(self.progenitor_element, self.progenitor_value)
-            external = self._custom_upgrade_from_fields(
-                "External Buffs",
-                self.external_fields,
-            )
-            upgrades = [upgrade for selected, upgrade in zip(self.slot_selected_upgrades, slot_upgrades) if selected != NONE]
-            if is_non_empty_upgrade(external):
-                upgrades.append(external)
+                return None
 
-            evolutions = self._selected_evolutions()
-            weapon = configured_weapon(
-                self.selected_weapon_type,
-                self.selected_weapon,
-                upgrades=upgrades,
-                selected_mode=self.selected_attack_mode or None,
-                evolutions=evolutions,
-                combo=self._combo_runtime_value() if self.melee_weapon else None,
-                runtime_conditions=self._evolution_runtime_context(),
-                stance_combo=self.selected_stance_combo if self.stance_combo_available else None,
-                ability_strength=self._ability_strength_multiplier(),
-                target=target,
-                progenitor=progenitor,
-            )
-            contribution_lookup = contribution_lookup_for_weapon(
-                weapon,
-                self.selected_weapon_type,
-                None,
-                upgrades,
-                target_metric="total_dps",
-            )
-            contribution_map = contribution_lookup_map(contribution_lookup)
-
-            contributions = []
-            for index, config in enumerate(SLOT_CONFIGS):
-                selected = self.slot_selected_upgrades[index]
-                contribution_name = config["label"] if selected == NONE else selected
-                contributions.append(
-                    format_contribution(
-                        contribution_value_for_name(contribution_map, contribution_name)
-                    )
-                )
-            self.slot_contributions = contributions
-
+            weapon, _upgrades, slot_upgrades = self._build_resolved_weapon(target)
+            self.slot_stat_rows = [self._slot_preview_rows(index, upgrade) for index, upgrade in enumerate(slot_upgrades)]
             self.main_result_metrics = main_metrics(weapon)
             self.weakpoint_result_metrics = []
             self.resistant_result_metrics = []
             self.misc_result_metrics = [] if self.selected_weapon_type == "Melee" else ranged_misc_metrics(weapon)
             self.result_metrics = self.main_result_metrics + self.weakpoint_result_metrics + self.resistant_result_metrics + self.misc_result_metrics
             self.ranged_result_metrics = self.result_metrics
-            self.damage_result_rows = effective_damage_rows(
-                weapon,
-                melee=self.selected_weapon_type == "Melee",
-            )
-            self.contribution_result_rows = contribution_rows(contribution_lookup)
+            self.damage_result_rows = effective_damage_rows(weapon, melee=self.selected_weapon_type == "Melee")
             self.result_summary = result_summary(weapon)
-            self.result_contribution_summary = result_contributions_summary(weapon)
+            self.contribution_revision += 1
+            self.contributions_pending = True
+            self.result_contribution_summary = "Computing upgrade contributions…"
             self.result_error = ""
             self.result_errors = []
             self.result_ready = True
+            return CalculatorState.refresh_contribution_summary
         except Exception as exc:
             self._clear_calculation_results()
             self.result_error = f"{type(exc).__name__}: {exc}"
             self.result_errors = [self.result_error]
+            return None

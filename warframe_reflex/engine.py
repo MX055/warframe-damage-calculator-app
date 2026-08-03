@@ -655,27 +655,7 @@ def compute_contribution_proportions(
     target: Enemy | None = None,
     target_metric: str = "total_weakpoint_dps",
 ) -> list[tuple[Upgrade, float]]:
-    if not upgrades:
-        return []
-
-    weapon_type = WEAPON_TYPES[weapon_type_name]
-    payload = weapon_payload(weapon_type_name, base_stats)
-    full_weapon = weapon_type(payload)
-    full_weapon.configure(Build(*upgrades), target=target)
-    full_score = float(getattr(full_weapon.results.main.final, target_metric, 0) or 0)
-    contributions: list[tuple[Upgrade, float]] = []
-
-    for index, upgrade in enumerate(upgrades):
-        remaining = [item for other_index, item in enumerate(upgrades) if other_index != index]
-        comparison_weapon = weapon_type(payload)
-        if remaining:
-            comparison_weapon.configure(Build(*remaining), target=target)
-        contributions.append(
-            (upgrade, full_score - float(getattr(comparison_weapon.results.main.final, target_metric, 0) or 0))
-        )
-
-    contribution_total = sum(value for _, value in contributions) or 1.0
-    return [(upgrade, value / contribution_total) for upgrade, value in contributions]
+    raise RuntimeError("compute_contribution_proportions is obsolete; use contribution_lookup_for_weapon with a library Calculator.resolve() result")
 
 
 def contribution_lookup_for_weapon(
@@ -685,27 +665,16 @@ def contribution_lookup_for_weapon(
     upgrades: list[Upgrade],
     target_metric: str = "total_dps",
 ):
+    if isinstance(resolved, tuple) and len(resolved) == 2:
+        _calculator, result = resolved
+        if not result.loadout.upgrades and result.loadout.progenitor is None:
+            return []
+        metric = target_metric.replace("total_weakpoint_", "total_").replace("flat_weakpoint_", "direct_").replace("total_resistant_", "total_").replace("flat_resistant_", "direct_").replace("flat_", "direct_")
+        # Match Formatter.contributions(): rebuild from the stored result inputs.
+        contribution_result = Calculator(result.weapon, result.target, result.loadout).contributions(attack=result.selected_attack, metric=metric, body_part=result.selected_bodypart, state=result.state)
+        return list(contribution_result.contribution.items())
     if not upgrades:
         return []
-    if isinstance(resolved, tuple) and len(resolved) == 2:
-        calculator, result = resolved
-        metric = target_metric.replace("total_weakpoint_", "total_").replace("flat_weakpoint_", "direct_").replace("total_resistant_", "total_").replace("flat_resistant_", "direct_").replace("flat_", "direct_")
-        full_value = float(getattr(result.aggregate.average, metric))
-        components = [*calculator.loadout.upgrades]
-        if calculator.loadout.progenitor is not None:
-            components.append(calculator.loadout.progenitor)
-        contributions: list[tuple[str, float]] = []
-        for component in components:
-            if isinstance(component, Progenitor):
-                comparison_loadout = Loadout(mods=calculator.loadout.mods, arcanes=calculator.loadout.arcanes, evolutions=calculator.loadout.evolutions)
-                name = f"{component.element.replace('_', ' ').title()} Progenitor ({component.bonus:.0%})"
-            else:
-                comparison_loadout = calculator.loadout - component
-                name = component.name
-            comparison = Calculator(calculator.weapon.copy(), calculator.target, comparison_loadout).resolve(attack=result.selected_attack, body_part=result.selected_bodypart, state=result.state)
-            contributions.append((name, full_value - float(getattr(comparison.aggregate.average, metric))))
-        total = sum(value for _, value in contributions) or 1.0
-        return [(name, value / total) for name, value in contributions]
     removal = getattr(getattr(resolved, "results", None), "removal_contributions", None)
     if callable(removal):
         items = contribution_items(removal(target=target_metric))
