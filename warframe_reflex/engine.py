@@ -15,8 +15,17 @@ from .data import database_enemy, database_weapon
 from .models import ContributionRow, DamageResultRow, DisplayRow, MetricRow
 
 
+FIELD_LABEL_OVERRIDES = {
+    "base_damage": "Damage",
+    "crit_chance": "Critical Chance",
+    "crit_damage": "Critical Damage",
+}
+
+
 def field_label(field_name: str) -> str:
-    return field_name.replace("_", " ").title()
+    if field_name in FIELD_LABEL_OVERRIDES:
+        return FIELD_LABEL_OVERRIDES[field_name]
+    return field_name.replace("_", " ").title().replace("Crit ", "Critical ")
 
 
 def parse_float(value: object, default: float = 0.0) -> float:
@@ -481,7 +490,8 @@ def upgrade_description_rows(upgrade: Upgrade, *, fallback_description: str | No
     text = str(getattr(upgrade, "description", "") or fallback_description or "").strip()
     if not text:
         return []
-    parts = [part.strip() for part in re.split(r"(?<=\.)\s+", text) if part.strip()]
+    text = text.replace("\\n", "\n")
+    parts = [part.strip() for part in re.split(r"[\r\n]+", text) if part.strip()]
     return [DisplayRow(part, "") for part in parts] if parts else [DisplayRow(text, "")]
 
 

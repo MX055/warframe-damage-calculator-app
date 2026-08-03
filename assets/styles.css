@@ -528,36 +528,28 @@ textarea.database-entry-input::placeholder {
   user-select: none;
 }
 
-/* Keep upgrade cards aligned to a fixed 4-stat preview footprint. */
+/* Upgrade card preview: keep a 4-row floor, grow/wrap for long descriptions. */
 .slot-stat-preview {
   --slot-stat-row-height: 1.35rem;
   --slot-stat-gap: 0.25rem;
   gap: var(--slot-stat-gap) !important;
-  height: calc(var(--slot-stat-row-height) * 4 + var(--slot-stat-gap) * 3);
   min-height: calc(var(--slot-stat-row-height) * 4 + var(--slot-stat-gap) * 3);
-  max-height: calc(var(--slot-stat-row-height) * 4 + var(--slot-stat-gap) * 3);
-  overflow: hidden;
+  overflow: visible;
 }
 
 .slot-stat-preview .preview-stat-row {
-  height: var(--slot-stat-row-height);
   min-height: var(--slot-stat-row-height);
-  max-height: var(--slot-stat-row-height);
-  align-items: center !important;
-  overflow: hidden;
+  align-items: flex-start !important;
+  overflow: visible;
 }
 
 .slot-stat-preview .preview-label,
 .slot-stat-preview .preview-value,
 .slot-stat-preview .empty-text {
-  line-height: var(--slot-stat-row-height);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 1.35;
 }
 
 .slot-stat-preview .preview-label {
-  overflow-wrap: normal;
   flex: 1 1 auto;
   min-width: 0;
 }
@@ -565,6 +557,18 @@ textarea.database-entry-input::placeholder {
 .slot-stat-preview .preview-description {
   color: var(--text-muted);
   width: 100%;
+  white-space: normal;
+  overflow: visible;
+  text-overflow: unset;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.slot-stat-preview .preview-value {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .slot-editor-toggle-input:focus-visible + .slot-editor-summary {

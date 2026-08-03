@@ -2199,18 +2199,21 @@ class CalculatorState(rx.State):
             if not field.name:
                 continue
             value = float(field.value)
+            stat = field_label(field.name)
             if field.name in RIVEN_FLAT_STAT_UNITS:
                 unit = RIVEN_FLAT_STAT_UNITS[field.name]
-                formatted = f"{value:,.3f}".rstrip("0").rstrip(".")
-                if unit:
-                    formatted = f"{formatted} {unit}"
+                amount = f"{abs(value):.2f}"
+                signed = f"+{amount}" if value >= 0 else f"-{amount}"
+                text = f"{signed}{unit} {stat}" if unit else f"{signed} {stat}"
             else:
-                formatted = f"{value:,.1%}"
-            rows.append(DisplayRow(field.label, formatted))
+                percent = f"{abs(value * 100):.2f}"
+                signed = f"+{percent}" if value >= 0 else f"-{percent}"
+                text = f"{signed}% {stat}"
+            rows.append(DisplayRow(text, ""))
         return rows
 
     def _pad_slot_preview_rows(self, rows: list[DisplayRow], *, minimum: int = 4) -> list[DisplayRow]:
-        padded = list(rows[:minimum]) if rows else [DisplayRow("No description.", "")]
+        padded = list(rows) if rows else [DisplayRow("No description.", "")]
         while len(padded) < minimum:
             padded.append(DisplayRow("\u00a0", "\u00a0"))
         return padded

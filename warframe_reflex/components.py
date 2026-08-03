@@ -449,7 +449,7 @@ def custom_damage_controls() -> rx.Component:
         rx.tabs.content(
             rx.grid(
                 damage_editor(
-                    "Base Damage",
+                    "Damage",
                     "direct_damage",
                     CalculatorState.direct_damage_fields,
                     CalculatorState.direct_damage_options,
