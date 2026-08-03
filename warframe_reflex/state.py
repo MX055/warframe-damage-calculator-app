@@ -366,7 +366,7 @@ class CalculatorState(rx.State):
     optimize_body_part_options: list[str] = rx.field(default_factory=list)
     optimize_body_part: str = ""
     optimize_flat_dot_weight: int = 50
-    optimize_aoe_weight: int = 100
+    optimize_aoe_weight: int = 50
     optimize_maximize_options: list[str] = rx.field(default_factory=lambda: list(OPTIMIZE_MAXIMIZE_OPTIONS))
     optimize_search_options: list[str] = rx.field(default_factory=lambda: list(OPTIMIZE_SEARCH_OPTIONS))
     optimize_status: str = ""
@@ -536,7 +536,7 @@ class CalculatorState(rx.State):
         self.optimize_body_part_options = []
         self.optimize_body_part = ""
         self.optimize_flat_dot_weight = 50
-        self.optimize_aoe_weight = 100
+        self.optimize_aoe_weight = 50
         self.optimize_excluded_upgrades = []
         self.optimize_default_exclusion_overrides = []
         self.optimize_upgrade_exclusion_options = []
