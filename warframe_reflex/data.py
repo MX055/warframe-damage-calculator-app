@@ -64,12 +64,14 @@ def raw_database() -> dict:
     return {}
 
 
+@lru_cache(maxsize=1)
 def raw_weapons_database() -> dict:
     weapons = raw_database().get("weapons", {}) or {}
     section_types = {"primaries": "primary", "secondaries": "secondary", "melees": "melee", "archguns": "archgun"}
     return {name: record | {"type": section_types[section]} for section in section_types for name, record in (weapons.get(section, {}) or {}).items()}
 
 
+@lru_cache(maxsize=1)
 def raw_upgrades_database() -> dict:
     upgrades = raw_database().get("upgrades", {}) or {}
     return {name: record | {"type": kind[:-1] if kind.endswith("s") else kind} for kind in ("mods", "arcanes", "perks") for name, record in (upgrades.get(kind, {}) or {}).items()}
@@ -309,16 +311,37 @@ def upgrade_incompatibility_names(metadata: dict) -> set[str]:
     return {str(name) for name in (metadata.get("conflicts") or metadata.get("incompatibility") or []) if name}
 
 
+@lru_cache(maxsize=1)
+def upgrade_conflict_adjacency() -> dict[str, frozenset[str]]:
+    """Bidirectional name → conflicting names, built once from the upgrade database."""
+    adjacency: dict[str, set[str]] = {}
+    for name, metadata in raw_upgrades_database().items():
+        for other in upgrade_incompatibility_names(metadata):
+            adjacency.setdefault(name, set()).add(other)
+            adjacency.setdefault(other, set()).add(name)
+    return {name: frozenset(others) for name, others in adjacency.items()}
+
+
+def upgrades_blocked_by_selected(selected_names: set[str]) -> set[str]:
+    """Selected upgrades plus every upgrade incompatible with any of them."""
+    adjacency = upgrade_conflict_adjacency()
+    blocked = set(selected_names)
+    for name in selected_names:
+        blocked |= adjacency.get(name, frozenset())
+    return blocked
+
+
 def upgrades_are_incompatible(left_name: str, right_name: str) -> bool:
     if not left_name or not right_name or left_name == right_name:
         return False
-    left = raw_upgrade_metadata(left_name)
-    right = raw_upgrade_metadata(right_name)
-    return right_name in upgrade_incompatibility_names(left) or left_name in upgrade_incompatibility_names(right)
+    return right_name in upgrade_conflict_adjacency().get(left_name, frozenset())
 
 
 def upgrade_conflicts_with_selected(upgrade_name: str, selected_names: set[str]) -> bool:
-    return any(upgrades_are_incompatible(upgrade_name, other) for other in selected_names if other != upgrade_name)
+    if not selected_names:
+        return False
+    neighbors = upgrade_conflict_adjacency().get(upgrade_name, frozenset())
+    return any(other in neighbors for other in selected_names if other != upgrade_name)
 
 
 def upgrade_matches_weapon_type(metadata: dict, weapon_category: str, *, selected_weapon_name: str | None = None, selected_mode: str | None = None, custom_metadata: dict | None = None) -> bool:
