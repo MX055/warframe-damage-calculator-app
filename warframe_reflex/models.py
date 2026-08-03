@@ -71,10 +71,9 @@ class ContributionRow:
 
 
 @dataclass
-class SummaryTableRow:
-    stat: str
-    base: str
-    modded: str
-    effective: str
-    average: str
-    section_start: bool = False
+class SavedBuildRow:
+    id: str
+    name: str
+    weapon: str
+    enemy: str
+    updated_label: str

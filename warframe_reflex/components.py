@@ -20,7 +20,7 @@ from .constants import (
     STANCE_SLOT_INDEX,
     WEAPON_TYPE_OPTIONS,
 )
-from .models import ClearBuffRow, ContributionRow, DamageResultRow, DisplayRow, EditorField, MetricRow, RuntimeStackField, RuntimeToggleField, SummaryTableRow
+from .models import ClearBuffRow, DisplayRow, EditorField, MetricRow, RuntimeStackField, RuntimeToggleField, SavedBuildRow
 from .state import NONE, RIVEN, CalculatorState
 
 
@@ -201,26 +201,38 @@ def toggle_control(label: str, checked, on_change) -> rx.Component:
     return rx.hstack(
         rx.text(label, class_name="toggle-label"),
         rx.spacer(),
-        rx.switch(checked=checked, on_change=on_change),
+        rx.switch(checked=checked, on_change=on_change, color_scheme="gray"),
         width="100%",
         align="center",
         class_name="toggle-control",
     )
 
 
-def header() -> rx.Component:
+def site_nav(active: str = "home") -> rx.Component:
+    if active == "home":
+        return rx.fragment()
+
+    return rx.link(
+        rx.button("Home", size="2", variant="soft", color_scheme="gray"),
+        href="/",
+        class_name="site-nav-home",
+    )
+
+
+def header(*, active: str = "calculator", subtitle: str | None = None) -> rx.Component:
+    default_subtitle = "Configure a weapon, enemy target, build, and external buffs with deterministic DPH/DPS calculations."
     return rx.hstack(
         rx.vstack(
             rx.heading("Warframe Damage Calculator", size="7"),
             rx.text(
-                "Configure a weapon, enemy target, build, and external buffs with deterministic DPH/DPS calculations.",
+                subtitle if subtitle is not None else default_subtitle,
                 class_name="header-subtitle",
             ),
             align="start",
             gap="1",
         ),
         rx.spacer(),
-        rx.badge("Reflex", variant="soft", size="2"),
+        site_nav(active),
         width="100%",
         align="center",
         class_name="app-header",
@@ -286,6 +298,7 @@ def read_me() -> rx.Component:
         type="single",
         collapsible=True,
         width="100%",
+        variant="soft",
         class_name="read-me",
     )
 
@@ -309,6 +322,7 @@ def damage_field_row(field: rx.Var[EditorField], group: str) -> rx.Component:
             on_click=CalculatorState.remove_damage_type(group, field.name),
             class_name="icon-button",
             variant="soft",
+            color_scheme="gray",
         ),
         columns="76px minmax(0, 1fr) 32px",
         column_gap="8px",
@@ -343,6 +357,8 @@ def damage_editor(
                     on_click=CalculatorState.add_damage_type(group),
                     disabled=options.length() == 0,
                     class_name="icon-button",
+                    variant="soft",
+                    color_scheme="gray",
                 ),
                 columns="minmax(0, 1fr) 32px",
                 column_gap="8px",
@@ -494,7 +510,7 @@ def incarnon_toggle_control(field: rx.Var[RuntimeToggleField]) -> rx.Component:
         rx.hstack(
             rx.text(rx.cond(field.value, "On", "Off"), class_name="enemy-toggle-state"),
             rx.spacer(),
-            rx.switch(checked=field.value, on_change=lambda value: CalculatorState.set_evolution_condition(field.name, value)),
+            rx.switch(checked=field.value, on_change=lambda value: CalculatorState.set_evolution_condition(field.name, value), color_scheme="gray"),
             width="100%",
             align="center",
             class_name="enemy-toggle-control",
@@ -639,7 +655,7 @@ def enemy_toggle_control(label: str, checked, on_change) -> rx.Component:
         rx.hstack(
             rx.text(rx.cond(checked, "On", "Off"), class_name="enemy-toggle-state"),
             rx.spacer(),
-            rx.switch(checked=checked, on_change=on_change),
+            rx.switch(checked=checked, on_change=on_change, color_scheme="gray"),
             width="100%",
             align="center",
             class_name="enemy-toggle-control",
@@ -776,6 +792,7 @@ def slot_editor_field(field: rx.Var[EditorField], index: int) -> rx.Component:
             on_click=CalculatorState.remove_slot_field(index, field.name),
             class_name="icon-button field-action-button",
             variant="soft",
+            color_scheme="gray",
         ),
         columns="84px minmax(0, 1fr) 32px",
         column_gap="8px",
@@ -825,6 +842,7 @@ def upgrade_runtime_controls(index: int) -> rx.Component:
                     on_change=lambda value: CalculatorState.set_slot_condition(
                         index, value
                     ),
+                    color_scheme="gray",
                     class_name="conditional-checkbox-control",
                 ),
                 rx.text(
@@ -928,7 +946,7 @@ def upgrade_slot(index: int) -> rx.Component:
                 ),
                 type="button",
                 on_click=lambda: CalculatorState.toggle_slot_editor(index),
-                disabled=CalculatorState.optimize_running,
+                disabled=CalculatorState.optimize_busy,
                 class_name="slot-editor-summary",
             ),
             rx.cond(
@@ -979,6 +997,7 @@ def external_editor_field(field: rx.Var[EditorField]) -> rx.Component:
             on_click=CalculatorState.remove_external_field(field.name),
             class_name="icon-button",
             variant="soft",
+            color_scheme="gray",
         ),
         columns="110px minmax(0, 1fr) 32px",
         column_gap="8px",
@@ -1004,6 +1023,8 @@ def external_buffs() -> rx.Component:
                     on_click=CalculatorState.add_external_field,
                     disabled=CalculatorState.external_available_fields.length() == 0,
                     class_name="icon-button",
+                    variant="soft",
+                    color_scheme="gray",
                 ),
                 columns="minmax(0, 1fr) 32px",
                 column_gap="8px",
@@ -1030,14 +1051,14 @@ def clear_upgrade_row(index: int) -> rx.Component:
         CalculatorState.slot_selected_upgrades[index] != NONE,
         rx.grid(
             rx.hstack(
-                rx.checkbox(checked=CalculatorState.clear_keep_slots[index], on_change=lambda value: CalculatorState.set_clear_keep_slot(index, value), disabled=CalculatorState.optimize_running),
+                rx.checkbox(checked=CalculatorState.clear_keep_slots[index], on_change=lambda value: CalculatorState.set_clear_keep_slot(index, value), disabled=CalculatorState.optimize_busy, color_scheme="gray"),
                 rx.text("Keep", class_name="clear-build-keep-label"),
                 align="center",
                 gap="2",
             ),
             rx.text(config["label"], class_name="clear-build-slot"),
             rx.text(CalculatorState.slot_selected_upgrades[index], class_name="clear-build-upgrade"),
-            rx.button("×", on_click=CalculatorState.remove_build_upgrade(index), disabled=CalculatorState.optimize_running, variant="ghost", class_name="clear-build-remove", title="Remove this upgrade"),
+            rx.button("×", on_click=CalculatorState.remove_build_upgrade(index), disabled=CalculatorState.optimize_busy, variant="soft", color_scheme="gray", class_name="clear-build-remove", title="Remove this upgrade"),
             columns="74px 62px minmax(0, 1fr) 30px",
             align="center",
             width="100%",
@@ -1050,14 +1071,14 @@ def clear_upgrade_row(index: int) -> rx.Component:
 def clear_external_buff_row(field: rx.Var[ClearBuffRow]) -> rx.Component:
     return rx.grid(
         rx.hstack(
-            rx.checkbox(checked=field.keep, on_change=lambda value: CalculatorState.set_clear_keep_buff(field.name, value), disabled=CalculatorState.optimize_running),
+            rx.checkbox(checked=field.keep, on_change=lambda value: CalculatorState.set_clear_keep_buff(field.name, value), disabled=CalculatorState.optimize_busy, color_scheme="gray"),
             rx.text("Keep", class_name="clear-build-keep-label"),
             align="center",
             gap="2",
         ),
         rx.text("Buff", class_name="clear-build-slot"),
         rx.text(field.label, class_name="clear-build-upgrade"),
-        rx.button("×", on_click=CalculatorState.remove_external_field(field.name), disabled=CalculatorState.optimize_running, variant="ghost", class_name="clear-build-remove", title="Remove this external buff"),
+        rx.button("×", on_click=CalculatorState.remove_external_field(field.name), disabled=CalculatorState.optimize_busy, variant="soft", color_scheme="gray", class_name="clear-build-remove", title="Remove this external buff"),
         columns="74px 62px minmax(0, 1fr) 30px",
         align="center",
         width="100%",
@@ -1076,7 +1097,7 @@ def clear_build_menu() -> rx.Component:
                     rx.vstack(*[clear_upgrade_row(index) for index in OPTIMIZER_SLOT_ORDER], rx.foreach(CalculatorState.clear_external_buff_rows, clear_external_buff_row), width="100%", gap="0", class_name="clear-build-list"),
                     rx.text("The build and external buffs are empty.", class_name="empty-text"),
                 ),
-                rx.button(rx.cond(CalculatorState.clear_has_kept_items, "Clear unmarked items", "Clear build & buffs"), on_click=CalculatorState.clear_build_and_buffs, disabled=(~CalculatorState.has_build_or_buffs) | CalculatorState.optimize_running, color_scheme="red", variant="soft", width="100%"),
+                rx.button(rx.cond(CalculatorState.clear_has_kept_items, "Clear unmarked items", "Clear build & buffs"), on_click=CalculatorState.clear_build_and_buffs, disabled=(~CalculatorState.has_build_or_buffs) | CalculatorState.optimize_busy, variant="soft", color_scheme="tomato", width="100%"),
                 width="100%",
                 align="start",
                 gap="3",
@@ -1187,7 +1208,7 @@ def optimizer_policy_select(index: int) -> rx.Component:
         ),
         value=CalculatorState.slot_policies[index],
         on_change=lambda value: CalculatorState.set_slot_policy(index, value),
-        disabled=(CalculatorState.slot_selected_upgrades[index] == NONE) | CalculatorState.optimize_running,
+        disabled=(CalculatorState.slot_selected_upgrades[index] == NONE) | CalculatorState.optimize_busy,
         width="100%",
     )
 
@@ -1208,26 +1229,31 @@ def optimizer_rule_row(index: int) -> rx.Component:
 def optimizer_exclusion_chip(value, remove_event, *, disabled) -> rx.Component:
     return rx.hstack(
         rx.text(value, class_name="optimizer-chip-label"),
-        rx.button("×", on_click=remove_event, disabled=disabled, variant="ghost", class_name="optimizer-chip-remove"),
+        rx.button("×", on_click=remove_event, disabled=disabled, variant="soft", color_scheme="gray", class_name="optimizer-chip-remove"),
         align="center",
         gap="1",
         class_name="optimizer-exclusion-chip",
     )
 
 
-def optimizer_exclusion_editor(title: str, description: str, options, pending, set_pending, add_event, excluded, remove_event: Callable, clear_event) -> rx.Component:
-    disabled = CalculatorState.no_weapon | CalculatorState.optimize_running
+def optimizer_exclusion_editor(title: str, description: str, options, pending, set_pending, add_event, excluded, remove_event: Callable, clear_event, restore_event, restore_enabled) -> rx.Component:
+    disabled = CalculatorState.no_weapon | CalculatorState.optimize_busy
     return rx.vstack(
         rx.hstack(
             rx.vstack(rx.text(title, class_name="optimizer-group-title"), rx.text(description, class_name="optimizer-help"), align="start", gap="1"),
             rx.spacer(),
-            rx.button("Clear", on_click=clear_event, disabled=disabled | (excluded.length() == 0), variant="ghost", size="1"),
+            rx.hstack(
+                rx.button("Restore", on_click=restore_event, disabled=disabled | ~restore_enabled, variant="soft", color_scheme="gray", size="1"),
+                rx.button("Clear", on_click=clear_event, disabled=disabled | (excluded.length() == 0), variant="soft", color_scheme="tomato", size="1"),
+                gap="2",
+                align="center",
+            ),
             width="100%",
             align="start",
         ),
         rx.grid(
             select_input(options, pending, set_pending, disabled=disabled | (options.length() == 0)),
-            rx.button("Exclude", on_click=add_event, disabled=disabled | (options.length() == 0), width="100%"),
+            rx.button("Exclude", on_click=add_event, disabled=disabled | (options.length() == 0), variant="soft", color_scheme="gray", width="100%"),
             columns="minmax(0, 1fr) 92px",
             class_name="optimizer-exclusion-picker",
             width="100%",
@@ -1251,7 +1277,7 @@ def optimizer_exclusion_editor(title: str, description: str, options, pending, s
 
 
 def optimizer_run_controls() -> rx.Component:
-    disabled = CalculatorState.no_weapon | CalculatorState.no_enemy | CalculatorState.optimize_running
+    disabled = CalculatorState.no_weapon | CalculatorState.no_enemy | CalculatorState.optimize_busy
     return rx.vstack(
         rx.grid(
             select_control(
@@ -1259,6 +1285,13 @@ def optimizer_run_controls() -> rx.Component:
                 CalculatorState.optimize_search_options,
                 CalculatorState.optimize_search_quality,
                 CalculatorState.set_optimize_search_quality,
+                disabled=disabled,
+            ),
+            select_control(
+                "Build",
+                CalculatorState.optimize_spatial_options,
+                CalculatorState.optimize_spatial,
+                CalculatorState.set_optimize_spatial,
                 disabled=disabled,
             ),
             labeled_control(
@@ -1289,21 +1322,6 @@ def optimizer_run_controls() -> rx.Component:
                     value=CalculatorState.optimize_flat_dot_weight,
                     on_change=CalculatorState.set_optimize_flat_dot_weight, disabled=disabled,
                     class_name="optimizer-balance-slider", aria_label="Flat DOT damage weight",
-                ),
-            ),
-            labeled_control(
-                rx.hstack(
-                    rx.text(rx.text.strong("Single-Target "), CalculatorState.optimize_single_target_weight, "%", class_name="optimizer-help"),
-                    rx.spacer(),
-                    rx.text(rx.text.strong("AoE "), CalculatorState.optimize_aoe_weight, "%", class_name="optimizer-help"),
-                    width="100%",
-                    align="center",
-                ),
-                rx.el.input(
-                    type="range", min="0", max="100", step="5",
-                    value=CalculatorState.optimize_aoe_weight,
-                    on_change=CalculatorState.set_optimize_aoe_weight, disabled=disabled,
-                    class_name="optimizer-balance-slider", aria_label="AoE damage mass weight",
                 ),
             ),
             columns="repeat(4, minmax(0, 1fr))",
@@ -1340,6 +1358,7 @@ def optimizer_run_controls() -> rx.Component:
                         checked=CalculatorState.optimize_find_riven,
                         on_change=CalculatorState.set_optimize_find_riven,
                         disabled=disabled | CalculatorState.riven_optimize_disabled,
+                        color_scheme="gray",
                     ),
                     rx.vstack(
                         rx.text("Find optimal Riven", class_name="toggle-label"),
@@ -1366,6 +1385,7 @@ def optimizer_run_controls() -> rx.Component:
                     checked=CalculatorState.optimize_find_evolutions,
                     on_change=CalculatorState.set_optimize_find_evolutions,
                     disabled=disabled,
+                    color_scheme="gray",
                 ),
                 rx.vstack(
                     rx.text("Find optimal Incarnon perks", class_name="toggle-label"),
@@ -1381,7 +1401,7 @@ def optimizer_run_controls() -> rx.Component:
         rx.cond(
             CalculatorState.supports_progenitor,
             rx.hstack(
-                rx.checkbox(checked=CalculatorState.optimize_find_progenitor, on_change=CalculatorState.set_optimize_find_progenitor, disabled=disabled),
+                rx.checkbox(checked=CalculatorState.optimize_find_progenitor, on_change=CalculatorState.set_optimize_find_progenitor, disabled=disabled, color_scheme="gray"),
                 rx.vstack(
                     rx.text("Find best progenitor element", class_name="toggle-label"),
                     rx.text("Tests every progenitor element without changing the configured percentage.", class_name="optimizer-help"),
@@ -1394,12 +1414,12 @@ def optimizer_run_controls() -> rx.Component:
             ),
         ),
         rx.cond(
-            CalculatorState.optimize_running,
+            CalculatorState.optimize_busy,
             rx.button(
                 "Abort optimization",
                 on_click=CalculatorState.abort_optimization,
-                color_scheme="red",
                 variant="soft",
+                color_scheme="tomato",
                 width="100%",
                 size="3",
             ),
@@ -1407,12 +1427,14 @@ def optimizer_run_controls() -> rx.Component:
                 "Optimize build",
                 on_click=CalculatorState.optimize_build,
                 disabled=disabled,
+                variant="solid",
+                color_scheme="gray",
                 width="100%",
                 size="3",
             ),
         ),
         rx.cond(
-            CalculatorState.optimize_running | (CalculatorState.optimize_progress > 0),
+            CalculatorState.optimize_busy | (CalculatorState.optimize_progress > 0),
             rx.vstack(
                 rx.box(
                     rx.box(class_name="optimizer-progress-fill", width=CalculatorState.optimize_progress_width),
@@ -1487,6 +1509,8 @@ def optimizer_section() -> rx.Component:
                                 CalculatorState.optimize_excluded_upgrades,
                                 CalculatorState.remove_optimize_excluded_upgrade,
                                 CalculatorState.clear_optimize_excluded_upgrades,
+                                CalculatorState.restore_optimize_excluded_upgrades,
+                                CalculatorState.optimize_upgrade_exclusions_customized,
                             ),
                             optimizer_exclusion_editor(
                                 "Excluded Riven stats",
@@ -1498,6 +1522,8 @@ def optimizer_section() -> rx.Component:
                                 CalculatorState.optimize_excluded_riven_stats,
                                 CalculatorState.remove_optimize_excluded_riven_stat,
                                 CalculatorState.clear_optimize_excluded_riven_stats,
+                                CalculatorState.restore_optimize_excluded_riven_stats,
+                                CalculatorState.optimize_riven_exclusions_customized,
                             ),
                             width="100%",
                             align="start",
@@ -1551,128 +1577,29 @@ def metric_grid(*metric_groups) -> rx.Component:
     )
 
 
-def damage_row(row: rx.Var[DamageResultRow]) -> rx.Component:
-    return rx.table.row(
-        rx.table.row_header_cell(row.damage_type),
-        rx.table.cell(row.damage),
-        rx.table.cell(row.weight),
-        rx.table.cell(row.forced_procs),
-        rx.table.cell(row.proc_rate),
-        rx.table.cell(row.explosion_damage),
-        rx.table.cell(row.explosion_weight),
-        rx.table.cell(row.explosion_forced_procs),
-        rx.table.cell(row.explosion_proc_rate),
-    )
-
-
-def damage_table() -> rx.Component:
-    return rx.box(
-        rx.table.root(
-            rx.table.header(
-                rx.table.row(
-                    rx.table.column_header_cell("Damage Type", row_span=2),
-                    rx.table.column_header_cell("Normal Attack", col_span=4),
-                    rx.table.column_header_cell("Explosion", col_span=4),
-                ),
-                rx.table.row(
-                    rx.table.column_header_cell("Damage"),
-                    rx.table.column_header_cell("Weight"),
-                    rx.table.column_header_cell("Forced Procs"),
-                    rx.table.column_header_cell("Proc Rate"),
-                    rx.table.column_header_cell("Damage"),
-                    rx.table.column_header_cell("Weight"),
-                    rx.table.column_header_cell("Forced Procs"),
-                    rx.table.column_header_cell("Proc Rate"),
-                ),
-            ),
-            rx.table.body(rx.foreach(CalculatorState.damage_result_rows, damage_row)),
-            width="100%",
-            variant="surface",
-        ),
-        class_name="damage-table-container",
-        width="100%",
-        overflow_x="auto",
-    )
-
-
-def contribution_table_row(row: rx.Var[ContributionRow]) -> rx.Component:
-    return rx.table.row(
-        rx.table.cell(row.rank),
-        rx.table.cell(row.kind),
-        rx.table.row_header_cell(row.name),
-        rx.table.cell(row.share),
-        rx.table.cell(row.removal),
-        rx.table.cell(row.impact, class_name="contribution-impact"),
-    )
-
-
-def contribution_table() -> rx.Component:
-    return rx.box(
-        rx.table.root(
-            rx.table.header(
-                rx.table.row(
-                    rx.table.column_header_cell("Rank"),
-                    rx.table.column_header_cell("Type"),
-                    rx.table.column_header_cell("Component"),
-                    rx.table.column_header_cell("Relative Contribution"),
-                    rx.table.column_header_cell("Removal Difference"),
-                    rx.table.column_header_cell("Impact"),
-                )
-            ),
-            rx.table.body(rx.foreach(CalculatorState.contribution_result_rows, contribution_table_row)),
-            width="100%",
-            variant="surface",
-        ),
-        class_name="damage-table-container",
-        width="100%",
-        overflow_x="auto",
-    )
-
-
-def summary_table_row(row: rx.Var[SummaryTableRow]) -> rx.Component:
-    return rx.table.row(
-        rx.table.row_header_cell(row.stat),
-        rx.table.cell(row.base),
-        rx.table.cell(row.modded),
-        rx.table.cell(row.effective),
-        rx.table.cell(row.average),
-        class_name=rx.cond(row.section_start, "summary-section-start", ""),
-    )
-
-
-def summary_table() -> rx.Component:
-    return rx.box(
-        rx.table.root(
-            rx.table.header(
-                rx.table.row(
-                    rx.table.column_header_cell("Stat"),
-                    rx.table.column_header_cell("Base"),
-                    rx.table.column_header_cell("Modded"),
-                    rx.table.column_header_cell("Effective"),
-                    rx.table.column_header_cell("Average"),
-                )
-            ),
-            rx.table.body(rx.foreach(CalculatorState.summary_result_rows, summary_table_row)),
-            width="100%",
-            variant="surface",
-        ),
-        class_name="damage-table-container",
-        width="100%",
-        overflow_x="auto",
-    )
-
-
 def result_tabs() -> rx.Component:
     return rx.tabs.root(
         rx.tabs.list(
-            rx.tabs.trigger("Status Summary", value="damage"),
+            rx.tabs.trigger("Stat Summary", value="summary"),
+            rx.tabs.trigger("Status Summary", value="status"),
             rx.tabs.trigger("Build Summary", value="contributions"),
-            rx.tabs.trigger("Stat Summary", value="summary-table"),
-            rx.tabs.trigger("Text Summaries", value="summary"),
         ),
         rx.tabs.content(
-            damage_table(),
-            value="damage",
+            rx.cond(
+                CalculatorState.result_summary != "",
+                rx.el.pre(CalculatorState.result_summary, class_name="plain-text-summary"),
+                rx.text("No summary available.", class_name="empty-text"),
+            ),
+            value="summary",
+            padding_top="1rem",
+        ),
+        rx.tabs.content(
+            rx.cond(
+                CalculatorState.result_status_summary != "",
+                rx.el.pre(CalculatorState.result_status_summary, class_name="plain-text-summary"),
+                rx.text("No status summary available.", class_name="empty-text"),
+            ),
+            value="status",
             padding_top="1rem",
         ),
         rx.tabs.content(
@@ -1680,48 +1607,15 @@ def result_tabs() -> rx.Component:
                 CalculatorState.contributions_pending,
                 rx.text(CalculatorState.result_contribution_summary, class_name="empty-text"),
                 rx.cond(
-                    CalculatorState.contribution_result_rows.length() > 0,
-                    contribution_table(),
+                    CalculatorState.result_contribution_summary != "",
+                    rx.el.pre(CalculatorState.result_contribution_summary, class_name="plain-text-summary"),
                     rx.text("No upgrade contributions.", class_name="empty-text"),
                 ),
             ),
             value="contributions",
             padding_top="1rem",
         ),
-        rx.tabs.content(
-            rx.cond(
-                CalculatorState.summary_result_rows.length() > 0,
-                summary_table(),
-                rx.text("No summary available.", class_name="empty-text"),
-            ),
-            value="summary-table",
-            padding_top="1rem",
-        ),
-        rx.tabs.content(
-            rx.vstack(
-                rx.text("Status Summary", class_name="card-title"),
-                rx.el.pre(
-                    CalculatorState.result_status_summary,
-                    class_name="plain-text-summary",
-                ),
-                rx.text("Build Summary", class_name="card-title"),
-                rx.el.pre(
-                    CalculatorState.result_contribution_summary,
-                    class_name="plain-text-summary",
-                ),
-                rx.text("Stat Summary", class_name="card-title"),
-                rx.el.pre(
-                    CalculatorState.result_summary,
-                    class_name="plain-text-summary",
-                ),
-                width="100%",
-                gap="3",
-                align="start",
-            ),
-            value="summary",
-            padding_top="1rem",
-        ),
-        default_value="damage",
+        default_value="summary",
         width="100%",
     )
 
@@ -1761,6 +1655,102 @@ def results_section() -> rx.Component:
 
 
 
+def saved_build_row(row: rx.Var[SavedBuildRow]) -> rx.Component:
+    return rx.box(
+        rx.hstack(
+            rx.vstack(
+                rx.text(row.name, class_name="card-title"),
+                rx.text(f"{row.weapon} · {row.enemy}", class_name="empty-text"),
+                rx.text(row.updated_label, class_name="empty-text"),
+                align="start",
+                gap="1",
+                width="100%",
+            ),
+            rx.spacer(),
+            rx.hstack(
+                rx.button("Open", size="2", variant="soft", color_scheme="gray", on_click=CalculatorState.open_saved_build(row.id)),
+                rx.button("Rename", size="2", variant="soft", color_scheme="gray", on_click=CalculatorState.begin_rename_build(row.id)),
+                rx.button("Delete", size="2", variant="soft", color_scheme="tomato", on_click=CalculatorState.delete_saved_build(row.id)),
+                gap="2",
+            ),
+            width="100%",
+            align="center",
+        ),
+        rx.cond(
+            CalculatorState.rename_build_id == row.id,
+            rx.hstack(
+                rx.input(value=CalculatorState.rename_build_name, on_change=CalculatorState.set_rename_build_name, width="100%"),
+                rx.button("Confirm", size="2", variant="soft", color_scheme="gray", on_click=CalculatorState.confirm_rename_build),
+                rx.button("Cancel", size="2", variant="soft", color_scheme="gray", on_click=CalculatorState.cancel_rename_build),
+                width="100%",
+                gap="2",
+                padding_top="0.75rem",
+            ),
+        ),
+        class_name="saved-build-card",
+        width="100%",
+    )
+
+
+def home_page() -> rx.Component:
+    return rx.box(
+        rx.vstack(
+            header(active="home", subtitle="Start a new build or reopen a saved one."),
+            read_me(),
+            rx.cond(
+                CalculatorState.hub_status != "",
+                rx.text(CalculatorState.hub_status, class_name="empty-text"),
+            ),
+            panel(
+                rx.vstack(
+                    section_title("Start", "Name a build, then open the editor. Changes autosave when you return here."),
+                    rx.cond(
+                        CalculatorState.naming_new_build,
+                        rx.hstack(
+                            rx.input(
+                                value=CalculatorState.new_build_name,
+                                on_change=CalculatorState.set_new_build_name,
+                                placeholder="Build name",
+                                width="100%",
+                            ),
+                            rx.button("Create", size="3", variant="soft", color_scheme="gray", on_click=CalculatorState.confirm_new_build),
+                            rx.button("Cancel", size="3", variant="soft", color_scheme="gray", on_click=CalculatorState.cancel_new_build),
+                            width="100%",
+                            gap="2",
+                            align="center",
+                        ),
+                        rx.button("New Build", size="3", variant="soft", color_scheme="gray", on_click=CalculatorState.begin_new_build),
+                    ),
+                    width="100%",
+                    gap="3",
+                    align="start",
+                ),
+            ),
+            panel(
+                rx.vstack(
+                    section_title("Saved Builds", "Stored in this browser only."),
+                    rx.cond(
+                        CalculatorState.saved_build_rows.length() > 0,
+                        rx.vstack(
+                            rx.foreach(CalculatorState.saved_build_rows, saved_build_row),
+                            width="100%",
+                            gap="3",
+                        ),
+                        rx.text("No saved builds yet.", class_name="empty-text"),
+                    ),
+                    width="100%",
+                    gap="3",
+                    align="start",
+                ),
+            ),
+            width="100%",
+            gap="7",
+            align="start",
+        ),
+        class_name="page-shell",
+    )
+
+
 def page() -> rx.Component:
     return rx.box(
         rx.cond(
@@ -1771,12 +1761,11 @@ def page() -> rx.Component:
             ),
         ),
         rx.vstack(
-            header(),
+            header(active="calculator", subtitle=CalculatorState.editor_subtitle),
             mobile_quick_nav(),
-            read_me(),
-            rx.el.fieldset(weapon_section(), disabled=CalculatorState.optimize_running, class_name="optimization-disabled-section"),
-            rx.el.fieldset(enemy_section(), disabled=CalculatorState.optimize_running, class_name="optimization-disabled-section"),
-            rx.el.fieldset(upgrades_section(), disabled=CalculatorState.optimize_running, class_name="optimization-disabled-section"),
+            rx.el.fieldset(weapon_section(), disabled=CalculatorState.optimize_busy, class_name="optimization-disabled-section"),
+            rx.el.fieldset(enemy_section(), disabled=CalculatorState.optimize_busy, class_name="optimization-disabled-section"),
+            rx.el.fieldset(upgrades_section(), disabled=CalculatorState.optimize_busy, class_name="optimization-disabled-section"),
             optimizer_section(),
             results_section(),
             width="100%",

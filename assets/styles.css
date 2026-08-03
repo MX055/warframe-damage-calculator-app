@@ -3,8 +3,9 @@
   --panel-bg: rgba(24, 27, 32, 0.96);
   --panel-soft: rgba(31, 35, 41, 0.9);
   --border: rgba(255, 255, 255, 0.10);
-  --border-strong: rgba(255, 122, 89, 0.36);
+  --border-strong: color-mix(in srgb, var(--accent-9) 40%, transparent);
   --text-muted: rgba(255, 255, 255, 0.62);
+  --accent-fill: var(--accent-9);
   --shadow: 0 18px 50px rgba(0, 0, 0, 0.22);
   --control-gap: 8px;
   --locked-control-bg: #262a2f;
@@ -15,7 +16,7 @@
 html,
 body {
   background:
-    radial-gradient(circle at top right, rgba(255, 90, 50, 0.08), transparent 32rem),
+    radial-gradient(circle at top right, color-mix(in srgb, var(--accent-9) 12%, transparent), transparent 32rem),
     var(--app-bg);
   min-width: 0;
   overflow-x: hidden;
@@ -35,6 +36,32 @@ body {
 
 .app-header {
   padding: 0.25rem 0;
+}
+
+.site-nav {
+  flex-wrap: wrap;
+}
+
+.site-nav-home {
+  text-decoration: none;
+}
+
+.site-nav-link {
+  color: var(--text-muted);
+  text-decoration: none;
+  font-size: 0.95rem;
+}
+
+.site-nav-link:hover,
+.site-nav-link-active {
+  color: var(--accent-a11);
+}
+
+.saved-build-card {
+  border: 1px solid var(--border);
+  background: var(--panel-soft);
+  border-radius: 12px;
+  padding: 0.9rem;
 }
 
 .mobile-quick-nav {
@@ -59,6 +86,11 @@ body {
   border: 1px solid var(--border);
   background: var(--panel-bg);
   box-shadow: var(--shadow);
+}
+
+.read-me {
+  border-color: color-mix(in srgb, var(--accent-9) 45%, transparent);
+  background: color-mix(in srgb, var(--accent-9) 8%, var(--panel-bg));
 }
 
 .read-me,
@@ -288,9 +320,9 @@ body {
 
 .error-box {
   padding: 0.9rem 1rem;
-  border: 1px solid rgba(255, 90, 70, 0.45);
+  border: 1px solid color-mix(in srgb, var(--accent-9) 45%, transparent);
   border-radius: 12px;
-  background: rgba(130, 30, 25, 0.2);
+  background: color-mix(in srgb, var(--accent-9) 12%, transparent);
 }
 
 .result-error-message {
@@ -380,7 +412,7 @@ body {
   .mobile-nav-link:active,
   .mobile-nav-link:focus-visible {
     color: white;
-    background: rgba(255, 122, 89, 0.14);
+    background: color-mix(in srgb, var(--accent-9) 14%, transparent);
   }
 
   .panel, .slot-card, .metric-card { border-radius: 12px; }
@@ -910,10 +942,11 @@ select.native-select option {
 .optimizer-exclusion-chip {
   max-width: 100%;
   min-height: 30px;
-  padding: 0.15rem 0.2rem 0.15rem 0.6rem;
-  border: 1px solid rgba(255, 122, 89, 0.3);
+  padding: 0.15rem 0.35rem 0.15rem 0.6rem;
+  border: 1px solid var(--gray-a6);
   border-radius: 999px;
-  background: rgba(255, 122, 89, 0.1);
+  background: var(--gray-a3);
+  overflow: hidden;
 }
 
 .optimizer-chip-label {
@@ -925,10 +958,11 @@ select.native-select option {
 }
 
 .optimizer-chip-remove {
-  width: 24px !important;
-  min-width: 24px !important;
-  height: 24px !important;
-  min-height: 24px !important;
+  width: 22px !important;
+  min-width: 22px !important;
+  height: 22px !important;
+  min-height: 22px !important;
+  margin-right: 0 !important;
   padding: 0 !important;
   border-radius: 999px !important;
 }
@@ -944,7 +978,7 @@ select.native-select option {
 .optimizer-progress-fill {
   height: 100%;
   border-radius: 999px;
-  background: rgba(255, 122, 89, 0.85);
+  background: var(--accent-fill);
   transition: width 0.15s linear;
 }
 

@@ -1,6 +1,6 @@
 from types import SimpleNamespace
 
-from warframe_damage_calculator import Build, Calculator, Effect, Mod, Optimizer as LibraryOptimizer, UpgradeStats, arsenal, balanced_damage_metric
+from warframe_damage_calculator import Build, Effect, Mod, Optimizer as LibraryOptimizer, UpgradeStats, arsenal
 
 import warframe_reflex.optimizer as app_optimizer
 from warframe_reflex.constants import SLOT_POLICY_DISCARD, SLOT_POLICY_KEEP
@@ -19,7 +19,7 @@ def test_only_kept_components_are_passed_to_library_optimizer(monkeypatch):
 
         def resolve(self, metric, **kwargs):
             captured["kwargs"] = kwargs
-            return SimpleNamespace(build=captured["build"], score=1.0, evaluations=1, elapsed=0.01, summary={"budget_exhausted": False})
+            return SimpleNamespace(build=captured["build"], score=1.0, evaluations=1, elapsed=0.01, budget_exhausted=False)
 
     monkeypatch.setattr(app_optimizer, "Optimizer", FakeOptimizer)
     request = app_optimizer.OptimizeRequest(
@@ -43,7 +43,7 @@ def test_only_kept_components_are_passed_to_library_optimizer(monkeypatch):
 
     assert [mod.name for mod in captured["build"].mods] == ["Serration"]
     assert captured["kwargs"]["body_part"] == "head"
-    assert app_optimizer._metric_for(request) is balanced_damage_metric
+    assert captured["kwargs"]["compact_metric"] is not None
 
 
 def test_app_uses_library_optimizer_class():
@@ -59,7 +59,7 @@ def test_optimized_runtime_stacks_are_preserved(monkeypatch):
             pass
 
         def resolve(self, metric, **kwargs):
-            return SimpleNamespace(build=Build(mods=[galvanized], arcanes=[compression]), score=1.0, evaluations=12, elapsed=0.01, summary={"budget_exhausted": False})
+            return SimpleNamespace(build=Build(mods=[galvanized], arcanes=[compression]), score=1.0, evaluations=12, elapsed=0.01, budget_exhausted=False)
 
     monkeypatch.setattr(app_optimizer, "Optimizer", FakeOptimizer)
     request = app_optimizer.OptimizeRequest(
@@ -93,3 +93,38 @@ def test_riven_damage_bonus_uses_the_editor_field_name():
 
     assert app_optimizer._riven_fields(riven) == {"base_damage": 1.5, "crit_chance": 1.2, "punch_through": 2.0, "status_chance": -0.5}
     assert app_optimizer._riven_roll(riven) == "3 Positive + 1 Negative"
+
+
+def test_optimize_result_progenitor_element_matches_dropdown_options(monkeypatch):
+    from warframe_damage_calculator.domain.builds import Progenitor
+    from warframe_reflex.constants import PROGENITOR_ELEMENT_OPTIONS
+
+    class FakeOptimizer:
+        def __init__(self, calculator):
+            self.calculator = calculator
+
+        def resolve(self, metric, **kwargs):
+            build = Build(mods=[], arcanes=[], progenitor=Progenitor(element="heat", bonus=0.6))
+            return SimpleNamespace(build=build, score=1.0, evaluations=1, elapsed=0.01, budget_exhausted=False)
+
+    monkeypatch.setattr(app_optimizer, "Optimizer", FakeOptimizer)
+    request = app_optimizer.OptimizeRequest(
+        weapon_type="Primary",
+        weapon_category="Rifle",
+        weapon_name="Kuva Ogris",
+        attack_mode="Rocket Impact",
+        evolutions={},
+        combo_count=1,
+        evolution_runtime={},
+        progenitor_element="None",
+        progenitor_value=0.0,
+        external_fields={},
+        slots=[],
+        find_optimal_riven=False,
+        find_optimal_progenitor=True,
+        enemy_name="Exo Gokstad Officer",
+    )
+    result = app_optimizer.optimize_build(request, progress=None)
+    assert result.progenitor_element == "heat"
+    assert result.progenitor_element in PROGENITOR_ELEMENT_OPTIONS
+    assert result.progenitor_value == 0.6

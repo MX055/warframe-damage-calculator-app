@@ -5,12 +5,12 @@ import re
 from collections.abc import Mapping
 from typing import Iterable
 
-from warframe_damage_calculator import Arcane, Build, Calculator, Dist, Effect, Enemy, Formatter, Mod, Progenitor, State, Upgrade, UpgradeStats
+from warframe_damage_calculator import Arcane, Build, Calculator, Dist, Effect, Enemy, Formatter, Mod, Progenitor, State, Upgrade, UpgradeStats, balanced_damage_metric
 from warframe_damage_calculator.domain.attacks import match_related_keys
 
 from .constants import INITIAL_COMBO_RUNTIME, UPGRADE_BOOL_FIELDS, WEAPON_TYPES
 from .data import database_enemy, database_weapon
-from .models import ContributionRow, DamageResultRow, DisplayRow, MetricRow, SummaryTableRow
+from .models import ContributionRow, DamageResultRow, DisplayRow, MetricRow
 
 
 FIELD_LABEL_OVERRIDES = {
@@ -529,7 +529,12 @@ def progenitor_upgrade(element: str, value: float, no_effect: str) -> Upgrade:
 def stance_combo_rows(combos: Mapping[str, object] | None) -> list[DisplayRow]:
     rows: list[DisplayRow] = []
     for key, raw in (combos or {}).items():
-        combo = raw if isinstance(raw, Mapping) else {}
+        if hasattr(raw, "to_record"):
+            combo = raw.to_record()
+        elif isinstance(raw, Mapping):
+            combo = raw
+        else:
+            combo = {}
         name = str(combo.get("name") or key.replace("_", " ").title())
         multiplier = float(combo.get("multiplier") or 1.0)
         hits = float(combo.get("hits") or 0.0)
@@ -632,18 +637,39 @@ def _normalize_contribution_metric(target_metric: str) -> str:
     return target_metric.replace("total_weak_point_", "total_").replace("flat_weak_point_", "direct_").replace("total_resistant_", "total_").replace("flat_resistant_", "direct_").replace("flat_", "direct_")
 
 
-def library_contribution_bundle(resolved, target_metric: str = "total_dps"):
+def _contribution_metric(target_metric: str | None = None):
+    if target_metric is None or target_metric in {"balanced", "balanced_total_dps_dph", "balanced_damage"}:
+        return balanced_damage_metric
+    name = _normalize_contribution_metric(target_metric)
+
+    def metric(result):
+        damage = result.aggregate.damage
+        mapping = {
+            "total_dps": damage.total_dps,
+            "direct_dps": damage.direct_dps,
+            "dot_dps": damage.dot_dps,
+            "total_dph": damage.total_dph,
+            "direct_dph": damage.direct_dph,
+            "dot_dph": damage.dot_dph,
+        }
+        return float(mapping.get(name, damage.total_dps))
+
+    metric.__name__ = name
+    return metric
+
+
+def library_contribution_bundle(resolved, target_metric: str | None = None):
     """Lookup rows from Calculator.contributions(); summary text from Formatter.build_summary()."""
     if not (isinstance(resolved, tuple) and len(resolved) == 2):
         return [], "", []
     _calculator, result = resolved
     if not result.build.upgrades and result.build.progenitor is None:
         return [], "", []
-    metric = _normalize_contribution_metric(target_metric)
+    metric = _contribution_metric(target_metric)
     contribution_result = Calculator(result.weapon, result.target, result.build).contributions(attack=result.selected_attack, metric=metric, body_part=result.selected_body_part, state=result.state)
     ordered = sorted(contribution_result.contribution.items(), key=lambda item: item[1], reverse=True)
     formatter = Formatter(result)
-    table = formatter.build_summary_table(metric=metric, body_part=result.selected_body_part, contributions=contribution_result)
+    table = formatter.build_summary_table(metric=metric, contributions=contribution_result)
     text = "" if table is None else formatter._table(table[1], table[2], title=table[0])
     rows = [] if table is None else [ContributionRow(*row) for row in table[2]]
     return ordered, text, rows
@@ -654,7 +680,7 @@ def contribution_lookup_for_weapon(
     weapon_type_name: str,
     base_stats: dict | None,
     upgrades: list[Upgrade],
-    target_metric: str = "total_dps",
+    target_metric: str | None = None,
 ):
     if isinstance(resolved, tuple) and len(resolved) == 2:
         lookup, _text, _rows = library_contribution_bundle(resolved, target_metric=target_metric)
@@ -663,7 +689,7 @@ def contribution_lookup_for_weapon(
         return []
     removal = getattr(getattr(resolved, "results", None), "removal_contributions", None)
     if callable(removal):
-        items = contribution_items(removal(target=target_metric))
+        items = contribution_items(removal(target=target_metric or "total_dps"))
         total = sum(value for _, value in items) or 1.0
         return [(key, value / total) for key, value in items]
     return []
@@ -780,18 +806,5 @@ def result_status_summary(resolved) -> str:
     return Formatter(resolved[1]).status_summary()
 
 
-def result_summary_table_rows(resolved) -> list[SummaryTableRow]:
-    _title, _headers, rows = Formatter(resolved[1]).stat_summary_table()
-    output: list[SummaryTableRow] = []
-    section_start = False
-    for index, row in enumerate(rows):
-        if row[0].startswith("\0"):
-            section_start = index > 0
-            continue
-        output.append(SummaryTableRow(stat=row[0], base=row[1], modded=row[2], effective=row[3], average=row[4], section_start=section_start))
-        section_start = False
-    return output
-
-
 def result_contributions_summary(resolved) -> str:
-    return Formatter(resolved[1]).build_summary()
+    return library_contribution_bundle(resolved)[1]

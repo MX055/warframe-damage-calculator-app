@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import threading
+import time
 import uuid
 from typing import Any
 
@@ -14,6 +15,9 @@ from .constants import (
     BUFF_FIELD,
     DAMAGE_TYPES,
     DEFAULT_DAMAGE_TYPES,
+    DEFAULT_OPTIMIZE_SPATIAL,
+    DEFAULT_OPTIMIZE_DPH_WEIGHT,
+    DEFAULT_OPTIMIZE_FLAT_DOT_WEIGHT,
     DEFAULT_OPTIMIZE_MAXIMIZE,
     DEFAULT_OPTIMIZE_SEARCH,
     FIELD_WEAPON_RULES,
@@ -24,8 +28,10 @@ from .constants import (
     NO_EFFECT,
     OPTIMIZE_MAXIMIZE_OPTIONS,
     OPTIMIZE_MAXIMIZE_TARGETS,
+    OPTIMIZE_SPATIAL_OPTIONS,
     OPTIMIZE_SEARCH_EVALUATION_BUDGETS,
     OPTIMIZE_SEARCH_OPTIONS,
+    PROGENITOR_ELEMENT_OPTIONS,
     RIVEN_NON_NEGATIVE_STATS,
     RIVEN_ROLL_CONFIGS,
     RIVEN_ROLL_OPTIONS,
@@ -78,7 +84,6 @@ from .engine import (
     contribution_lookup_map,
     contribution_value_for_name,
     stance_combo_rows,
-    effective_damage_rows,
     field_label,
     format_contribution,
     is_field_allowed,
@@ -91,7 +96,6 @@ from .engine import (
     ranged_misc_metrics,
     result_summary,
     result_status_summary,
-    result_summary_table_rows,
     resistant_metrics,
     upgrade_field_input_config,
     upgrade_description_rows,
@@ -99,14 +103,32 @@ from .engine import (
 )
 from .models import (
     ClearBuffRow,
-    ContributionRow,
-    DamageResultRow,
     DisplayRow,
     EditorField,
     MetricRow,
     RuntimeStackField,
     RuntimeToggleField,
-    SummaryTableRow,
+    SavedBuildRow,
+)
+from .persistence import (
+    resolve_optimize_spatial,
+    default_settings,
+    delete_build,
+    encode_builds,
+    encode_settings,
+    empty_build_slot_defaults,
+    find_build,
+    hydrate_editor_fields,
+    hydrate_slot_fields,
+    hydrate_stacks,
+    hydrate_toggles,
+    new_build_entry,
+    pad_list,
+    parse_builds,
+    parse_settings,
+    rename_build,
+    snapshot_from_state_values,
+    upsert_build,
 )
 
 NONE = "None"
@@ -118,8 +140,21 @@ def _format_elapsed(seconds: float) -> str:
     return f"{total // 3600:02d}:{total % 3600 // 60:02d}:{total % 60:02d}"
 
 
+def _format_timestamp(seconds: float) -> str:
+    total = max(int(seconds), 0)
+    return time.strftime("%Y-%m-%d %H:%M", time.localtime(total))
+
+
 def _optimizer_progress(fraction: float) -> float:
     return min(max(float(fraction), 0.0) * 100.0, 100.0)
+
+
+def _optimizer_progress_from_snapshot(progress) -> float:
+    fraction = _optimizer_progress(progress.fraction)
+    budget = int(getattr(progress, "evaluation_budget", 0) or 0)
+    if budget > 0:
+        fraction = max(fraction, _optimizer_progress(int(progress.evaluations) / budget))
+    return fraction
 
 
 def _optimizer_upgrade_blacklist(excluded: list[str] | set[str], default_overrides: list[str] | set[str]) -> set[str]:
@@ -338,11 +373,12 @@ class CalculatorState(rx.State):
     optimize_find_progenitor: bool = False
     optimize_maximize_target: str = DEFAULT_OPTIMIZE_MAXIMIZE
     optimize_search_quality: str = DEFAULT_OPTIMIZE_SEARCH
-    optimize_dph_weight: int = 50
+    optimize_dph_weight: int = DEFAULT_OPTIMIZE_DPH_WEIGHT
     optimize_body_part_options: list[str] = rx.field(default_factory=list)
     optimize_body_part: str = ""
-    optimize_flat_dot_weight: int = 50
-    optimize_aoe_weight: int = 50
+    optimize_flat_dot_weight: int = DEFAULT_OPTIMIZE_FLAT_DOT_WEIGHT
+    optimize_spatial: str = DEFAULT_OPTIMIZE_SPATIAL
+    optimize_spatial_options: list[str] = rx.field(default_factory=lambda: list(OPTIMIZE_SPATIAL_OPTIONS))
     optimize_maximize_options: list[str] = rx.field(default_factory=lambda: list(OPTIMIZE_MAXIMIZE_OPTIONS))
     optimize_search_options: list[str] = rx.field(default_factory=lambda: list(OPTIMIZE_SEARCH_OPTIONS))
     optimize_status: str = ""
@@ -375,9 +411,6 @@ class CalculatorState(rx.State):
     ranged_result_metrics: list[MetricRow] = rx.field(default_factory=list)
     misc_result_metrics: list[MetricRow] = rx.field(default_factory=list)
     result_metrics: list[MetricRow] = rx.field(default_factory=list)
-    damage_result_rows: list[DamageResultRow] = rx.field(default_factory=list)
-    contribution_result_rows: list[ContributionRow] = rx.field(default_factory=list)
-    summary_result_rows: list[SummaryTableRow] = rx.field(default_factory=list)
     result_summary: str = ""
     result_status_summary: str = ""
     result_contribution_summary: str = ""
@@ -386,6 +419,41 @@ class CalculatorState(rx.State):
     result_error: str = ""
     result_errors: list[str] = rx.field(default_factory=list)
     result_ready: bool = False
+
+    persisted_settings_json: str = rx.LocalStorage("{}", name="wfdc_settings")
+    persisted_builds_json: str = rx.LocalStorage("{}", name="wfdc_builds")
+    saved_build_rows: list[SavedBuildRow] = rx.field(default_factory=list)
+    save_build_name: str = ""
+    save_build_status: str = ""
+    active_build_id: str = ""
+    pending_build_id: str = ""
+    calculator_bootstrapped: bool = False
+    naming_new_build: bool = False
+    new_build_name: str = ""
+    rename_build_id: str = ""
+    rename_build_name: str = ""
+    hub_status: str = ""
+
+    settings_enemy_faction: str = ""
+    settings_enemy: str = NONE
+    settings_enemy_options: list[str] = rx.field(default_factory=lambda: [NONE])
+    settings_enemy_level: int = 100
+    settings_enemy_steel_path: bool = False
+    settings_enemy_empowered: bool = False
+    settings_body_part: str = ""
+    settings_body_part_options: list[str] = rx.field(default_factory=list)
+    settings_maximize_options: list[str] = rx.field(default_factory=lambda: list(OPTIMIZE_MAXIMIZE_OPTIONS))
+    settings_search_options: list[str] = rx.field(default_factory=lambda: list(OPTIMIZE_SEARCH_OPTIONS))
+    settings_maximize_target: str = DEFAULT_OPTIMIZE_MAXIMIZE
+    settings_search_quality: str = DEFAULT_OPTIMIZE_SEARCH
+    settings_dph_weight: int = DEFAULT_OPTIMIZE_DPH_WEIGHT
+    settings_flat_dot_weight: int = DEFAULT_OPTIMIZE_FLAT_DOT_WEIGHT
+    settings_spatial: str = DEFAULT_OPTIMIZE_SPATIAL
+    settings_spatial_options: list[str] = rx.field(default_factory=lambda: list(OPTIMIZE_SPATIAL_OPTIONS))
+    settings_find_riven: bool = False
+    settings_find_evolutions: bool = False
+    settings_find_progenitor: bool = False
+    settings_status: str = ""
 
     @rx.var
     def no_enemy(self) -> bool:
@@ -449,6 +517,11 @@ class CalculatorState(rx.State):
     def has_error(self) -> bool:
         return bool(self.result_errors)
 
+    @rx.var(cache=True)
+    def editor_subtitle(self) -> str:
+        name = self.save_build_name.strip()
+        return name if name else "Edit build"
+
     @rx.var
     def supports_progenitor(self) -> bool:
         return self._supports_progenitor()
@@ -506,11 +579,11 @@ class CalculatorState(rx.State):
         self.optimize_find_progenitor = False
         self.optimize_maximize_target = DEFAULT_OPTIMIZE_MAXIMIZE
         self.optimize_search_quality = DEFAULT_OPTIMIZE_SEARCH
-        self.optimize_dph_weight = 50
+        self.optimize_dph_weight = DEFAULT_OPTIMIZE_DPH_WEIGHT
         self.optimize_body_part_options = []
         self.optimize_body_part = ""
-        self.optimize_flat_dot_weight = 50
-        self.optimize_aoe_weight = 50
+        self.optimize_flat_dot_weight = DEFAULT_OPTIMIZE_FLAT_DOT_WEIGHT
+        self.optimize_spatial = DEFAULT_OPTIMIZE_SPATIAL
         self.optimize_excluded_upgrades = []
         self.optimize_default_exclusion_overrides = []
         self.optimize_upgrade_exclusion_options = []
@@ -545,6 +618,337 @@ class CalculatorState(rx.State):
         self.evolution_condition_toggles = []
         self.evolution_stack_fields = []
 
+    def _settings(self) -> dict:
+        return parse_settings(self.persisted_settings_json)
+
+    def _builds(self) -> list[dict]:
+        return parse_builds(self.persisted_builds_json)
+
+    def _persist_settings(self, settings: dict):
+        self.persisted_settings_json = encode_settings(settings)
+
+    def _persist_builds(self, builds: list[dict]):
+        self.persisted_builds_json = encode_builds(builds)
+        self._refresh_saved_build_rows()
+
+    def _refresh_saved_build_rows(self):
+        rows = []
+        for entry in self._builds():
+            rows.append(SavedBuildRow(
+                id=str(entry["id"]),
+                name=str(entry["name"]),
+                weapon=str(entry.get("weapon") or NONE),
+                enemy=str(entry.get("enemy") or NONE),
+                updated_label=_format_timestamp(float(entry.get("updated_at") or 0)),
+            ))
+        self.saved_build_rows = rows
+
+    def _build_snapshot(self) -> dict:
+        return snapshot_from_state_values(
+            selected_weapon_type=self.selected_weapon_type,
+            selected_weapon_category=self.selected_weapon_category,
+            selected_weapon=self.selected_weapon,
+            selected_attack_mode=self.selected_attack_mode,
+            evolution_selections=self.evolution_selections,
+            evolution_condition_toggles=self.evolution_condition_toggles,
+            evolution_stack_fields=self.evolution_stack_fields,
+            melee_combo_count=self.melee_combo_count,
+            selected_stance_combo=self.selected_stance_combo,
+            progenitor_element=self.progenitor_element,
+            progenitor_value=self.progenitor_value,
+            ability_strength=self.ability_strength,
+            selected_enemy_faction=self.selected_enemy_faction,
+            selected_enemy=self.selected_enemy,
+            enemy_level=self.enemy_level,
+            enemy_steel_path=self.enemy_steel_path,
+            enemy_empowered=self.enemy_empowered,
+            optimize_body_part=self.optimize_body_part,
+            slot_selected_upgrades=self.slot_selected_upgrades,
+            slot_policies=self.slot_policies,
+            slot_ranks=self.slot_ranks,
+            slot_stacks=self.slot_stacks,
+            slot_conditions_enabled=self.slot_conditions_enabled,
+            slot_fields=self.slot_fields,
+            slot_riven_rolls=self.slot_riven_rolls,
+            external_fields=self.external_fields,
+            optimize_find_riven=self.optimize_find_riven,
+            optimize_find_evolutions=self.optimize_find_evolutions,
+            optimize_find_progenitor=self.optimize_find_progenitor,
+            optimize_maximize_target=self.optimize_maximize_target,
+            optimize_search_quality=self.optimize_search_quality,
+            optimize_dph_weight=self.optimize_dph_weight,
+            optimize_flat_dot_weight=self.optimize_flat_dot_weight,
+            optimize_spatial=self.optimize_spatial,
+            optimize_excluded_upgrades=self.optimize_excluded_upgrades,
+            optimize_default_exclusion_overrides=self.optimize_default_exclusion_overrides,
+            optimize_excluded_riven_stats=self.optimize_excluded_riven_stats,
+            optimize_default_riven_exclusion_overrides=self.optimize_default_riven_exclusion_overrides,
+        )
+
+    def _apply_optimizer_settings(self, optimizer: dict):
+        self.optimize_find_riven = bool(optimizer.get("find_riven", False))
+        self.optimize_find_evolutions = bool(optimizer.get("find_evolutions", False))
+        self.optimize_find_progenitor = bool(optimizer.get("find_progenitor", False))
+        self.optimize_maximize_target = str(optimizer.get("maximize_target") or DEFAULT_OPTIMIZE_MAXIMIZE)
+        if self.optimize_maximize_target not in OPTIMIZE_MAXIMIZE_OPTIONS:
+            self.optimize_maximize_target = DEFAULT_OPTIMIZE_MAXIMIZE
+        self.optimize_search_quality = str(optimizer.get("search_quality") or DEFAULT_OPTIMIZE_SEARCH)
+        if self.optimize_search_quality not in OPTIMIZE_SEARCH_OPTIONS:
+            self.optimize_search_quality = DEFAULT_OPTIMIZE_SEARCH
+        self.optimize_dph_weight = int(optimizer.get("dph_weight", DEFAULT_OPTIMIZE_DPH_WEIGHT))
+        self.optimize_flat_dot_weight = int(optimizer.get("flat_dot_weight", DEFAULT_OPTIMIZE_FLAT_DOT_WEIGHT))
+        self.optimize_spatial = resolve_optimize_spatial(optimizer)
+        self.optimize_excluded_upgrades = list(optimizer.get("excluded_upgrades") or [])
+        self.optimize_default_exclusion_overrides = list(optimizer.get("default_exclusion_overrides") or [])
+        self.optimize_excluded_riven_stats = list(optimizer.get("excluded_riven_stats") or [])
+        self.optimize_default_riven_exclusion_overrides = list(optimizer.get("default_riven_exclusion_overrides") or [])
+        self.optimize_pending_excluded_upgrade = ""
+        self.optimize_pending_excluded_riven_stat = ""
+
+    def _apply_settings(self, settings: dict | None = None):
+        data = settings or self._settings()
+        enemy = data.get("enemy") or {}
+        optimizer = data.get("optimizer") or {}
+        self._refresh_enemy_options()
+        faction = str(enemy.get("faction") or "")
+        if faction and faction in self.enemy_faction_options:
+            self.selected_enemy_faction = faction
+            self.enemy_options = [NONE, *enemies_for_faction(faction)]
+        enemy_name = str(enemy.get("name") or NONE)
+        self.selected_enemy = enemy_name if enemy_name in self.enemy_options else NONE
+        self.enemy_level = int(enemy.get("level", 100))
+        self.enemy_steel_path = bool(enemy.get("steel_path", False))
+        self.enemy_empowered = bool(enemy.get("empowered", False))
+        self.optimize_body_part = str(enemy.get("body_part") or "")
+        self._apply_optimizer_settings(optimizer)
+        maximize = self.optimize_maximize_target
+        self._sync_enemy_preview()
+        if maximize in OPTIMIZE_MAXIMIZE_OPTIONS:
+            self.optimize_maximize_target = maximize
+
+    def _sync_enemy_preview(self):
+        try:
+            target = self._target_enemy()
+            self._refresh_enemy_preview(target)
+        except Exception as exc:
+            self.enemy_error = f"{type(exc).__name__}: {exc}"
+            if self.no_enemy:
+                self._refresh_enemy_preview(None)
+
+    def _apply_build_snapshot(self, snapshot: dict):
+        defaults = empty_build_slot_defaults()
+        data = {**defaults, **(snapshot or {})}
+        category = str(data.get("selected_weapon_category") or "Rifle")
+        if category not in WEAPON_CATEGORY_TYPES:
+            category = "Rifle"
+        self.selected_weapon_category = category
+        self.selected_weapon_type = str(data.get("selected_weapon_type") or WEAPON_CATEGORY_TYPES[category])
+        if self.selected_weapon_type not in {"Primary", "Secondary", "Melee"}:
+            self.selected_weapon_type = WEAPON_CATEGORY_TYPES[category]
+        self._refresh_weapon_options()
+        weapon_name = str(data.get("selected_weapon") or NONE)
+        self.selected_weapon = weapon_name if weapon_name in self.weapon_options else NONE
+        saved_attack_mode = str(data.get("selected_attack_mode") or "")
+        saved_evolutions = list(data.get("evolution_selections") or [])
+        self._refresh_weapon_features()
+        self._refresh_upgrade_options()
+        if saved_attack_mode and saved_attack_mode in self.attack_mode_options:
+            self.selected_attack_mode = saved_attack_mode
+        elif self.attack_mode_options:
+            self.selected_attack_mode = self.attack_mode_options[0]
+        else:
+            self.selected_attack_mode = ""
+        self.evolution_selections = [
+            saved_evolutions[index] if index < len(saved_evolutions) and saved_evolutions[index] in (self.evolution_options[index] if index < len(self.evolution_options) else []) else "None"
+            for index, _ in enumerate(self.evolution_labels)
+        ]
+        self._refresh_evolution_runtime_controls()
+        saved_toggles = {field.name: field.value for field in hydrate_toggles(data.get("evolution_condition_toggles"))}
+        saved_stacks = {field.name: field.value for field in hydrate_stacks(data.get("evolution_stack_fields"))}
+        if saved_toggles:
+            toggles = copy.deepcopy(self.evolution_condition_toggles)
+            for field in toggles:
+                if field.name in saved_toggles:
+                    field.value = bool(saved_toggles[field.name])
+            self.evolution_condition_toggles = toggles
+        if saved_stacks:
+            stacks = copy.deepcopy(self.evolution_stack_fields)
+            for field in stacks:
+                if field.name in saved_stacks:
+                    field.value = str(saved_stacks[field.name])
+            self.evolution_stack_fields = stacks
+
+        self.melee_combo_count = str(data.get("melee_combo_count") or INITIAL_COMBO_OPTION)
+        if self.melee_combo_count not in MELEE_COMBO_OPTIONS:
+            self.melee_combo_count = INITIAL_COMBO_OPTION
+        self.progenitor_element = str(data.get("progenitor_element") or NO_EFFECT)
+        self.progenitor_value = float(data.get("progenitor_value") or 0.0)
+        if self.progenitor_element not in {NO_EFFECT, NONE, ""} and self.progenitor_value <= 0:
+            self.progenitor_value = 0.6
+        self.ability_strength = float(data.get("ability_strength") or 100.0)
+
+        self._refresh_enemy_options()
+        faction = str(data.get("selected_enemy_faction") or "")
+        if faction and faction in self.enemy_faction_options:
+            self.selected_enemy_faction = faction
+            self.enemy_options = [NONE, *enemies_for_faction(faction)]
+        enemy_name = str(data.get("selected_enemy") or NONE)
+        self.selected_enemy = enemy_name if enemy_name in self.enemy_options else NONE
+        self.enemy_level = int(data.get("enemy_level") or 100)
+        self.enemy_steel_path = bool(data.get("enemy_steel_path", False))
+        self.enemy_empowered = bool(data.get("enemy_empowered", False))
+        self.optimize_body_part = str(data.get("optimize_body_part") or "")
+        self._sync_enemy_preview()
+
+        slot_count = len(SLOT_CONFIGS)
+        self.slot_selected_upgrades = pad_list(data.get("slot_selected_upgrades"), slot_count, NONE)
+        self.slot_policies = pad_list(data.get("slot_policies"), slot_count, SLOT_POLICY_DISCARD)
+        self.slot_ranks = [int(value) for value in pad_list(data.get("slot_ranks"), slot_count, 0)]
+        self.slot_stacks = [int(value) for value in pad_list(data.get("slot_stacks"), slot_count, 0)]
+        self.slot_conditions_enabled = [bool(value) for value in pad_list(data.get("slot_conditions_enabled"), slot_count, True)]
+        self.slot_riven_rolls = pad_list(data.get("slot_riven_rolls"), slot_count, "2 Positive + 1 Negative")
+        self.slot_fields = hydrate_slot_fields(data.get("slot_fields"))
+        self.external_fields = hydrate_editor_fields(data.get("external_fields"))
+        max_ranks, max_stacks = list(self.slot_max_ranks), list(self.slot_max_stacks)
+        for index, config in enumerate(SLOT_CONFIGS):
+            name = self.slot_selected_upgrades[index]
+            if name in {NONE, RIVEN}:
+                max_ranks[index] = 0 if name != NONE else (5 if config["kind"] == "arcane" else 10)
+                max_stacks[index] = 0
+            else:
+                _, maximum_rank = database_rank_bounds(name, is_arcane_slot=config["kind"] == "arcane")
+                maximum_stacks = database_max_stacks(name, is_arcane_slot=config["kind"] == "arcane") or 0
+                max_ranks[index], max_stacks[index] = maximum_rank, maximum_stacks
+        self.slot_max_ranks, self.slot_max_stacks = max_ranks, max_stacks
+        self._ensure_selected_upgrades_in_options()
+        self._refresh_slot_condition_metadata()
+        self._refresh_all_riven_field_limits()
+        self._refresh_all_field_options()
+        self._refresh_external_field_options()
+        previous_combo = str(data.get("selected_stance_combo") or "neutral")
+        self._refresh_stance_combo_options()
+        self.selected_stance_combo = previous_combo if previous_combo in self.stance_combo_options else (self.stance_combo_options[0] if self.stance_combo_options else "neutral")
+
+        self._apply_optimizer_settings({
+            "find_riven": data.get("optimize_find_riven", False),
+            "find_evolutions": data.get("optimize_find_evolutions", False),
+            "find_progenitor": data.get("optimize_find_progenitor", False),
+            "maximize_target": data.get("optimize_maximize_target", DEFAULT_OPTIMIZE_MAXIMIZE),
+            "search_quality": data.get("optimize_search_quality", DEFAULT_OPTIMIZE_SEARCH),
+            "dph_weight": data.get("optimize_dph_weight", DEFAULT_OPTIMIZE_DPH_WEIGHT),
+            "flat_dot_weight": data.get("optimize_flat_dot_weight", DEFAULT_OPTIMIZE_FLAT_DOT_WEIGHT),
+            "spatial": resolve_optimize_spatial({"spatial": data.get("optimize_spatial"), "aoe_weight": data.get("optimize_aoe_weight")}),
+            "excluded_upgrades": data.get("optimize_excluded_upgrades") or [],
+            "default_exclusion_overrides": data.get("optimize_default_exclusion_overrides") or [],
+            "excluded_riven_stats": data.get("optimize_excluded_riven_stats") or [],
+            "default_riven_exclusion_overrides": data.get("optimize_default_riven_exclusion_overrides") or [],
+        })
+        self._refresh_optimizer_exclusion_options()
+        self._invalidate_optimizer_result()
+
+    def _prepare_new_calculator_session(self):
+        self.active_build_id = ""
+        self.pending_build_id = ""
+        self.save_build_name = ""
+        self.save_build_status = ""
+        self._clear_build_state()
+        self._reset_optimizer_settings()
+        self.selected_weapon_category = "Rifle"
+        self.selected_weapon_type = "Primary"
+        self.selected_weapon = NONE
+        self.selected_attack_mode = ""
+        self.evolution_selections = []
+        self.evolution_condition_toggles = []
+        self.evolution_stack_fields = []
+        self.melee_combo_count = INITIAL_COMBO_OPTION
+        self.selected_stance_combo = "neutral"
+        self.progenitor_element = NO_EFFECT
+        self.progenitor_value = 0.0
+        self.ability_strength = 100.0
+        self._refresh_weapon_options()
+        self._refresh_weapon_features()
+        self._refresh_upgrade_options()
+        self._apply_settings()
+        self._refresh_all_riven_field_limits()
+        self._refresh_damage_options()
+        self._refresh_all_field_options()
+
+    def _load_settings_form(self):
+        settings = self._settings()
+        enemy = settings["enemy"]
+        optimizer = settings["optimizer"]
+        self._refresh_enemy_options()
+        faction = str(enemy.get("faction") or self.selected_enemy_faction or (self.enemy_faction_options[0] if self.enemy_faction_options else ""))
+        self.settings_enemy_faction = faction if faction in self.enemy_faction_options else (self.enemy_faction_options[0] if self.enemy_faction_options else "")
+        self.settings_enemy_options = [NONE, *enemies_for_faction(self.settings_enemy_faction)]
+        enemy_name = str(enemy.get("name") or NONE)
+        self.settings_enemy = enemy_name if enemy_name in self.settings_enemy_options else NONE
+        self.settings_enemy_level = int(enemy.get("level", 100))
+        self.settings_enemy_steel_path = bool(enemy.get("steel_path", False))
+        self.settings_enemy_empowered = bool(enemy.get("empowered", False))
+        self.settings_body_part = str(enemy.get("body_part") or "")
+        self._refresh_settings_body_parts()
+        self.settings_maximize_target = str(optimizer.get("maximize_target") or DEFAULT_OPTIMIZE_MAXIMIZE)
+        if self.settings_maximize_target not in OPTIMIZE_MAXIMIZE_OPTIONS:
+            self.settings_maximize_target = DEFAULT_OPTIMIZE_MAXIMIZE
+        self.settings_search_quality = str(optimizer.get("search_quality") or DEFAULT_OPTIMIZE_SEARCH)
+        if self.settings_search_quality not in OPTIMIZE_SEARCH_OPTIONS:
+            self.settings_search_quality = DEFAULT_OPTIMIZE_SEARCH
+        self.settings_dph_weight = int(optimizer.get("dph_weight", DEFAULT_OPTIMIZE_DPH_WEIGHT))
+        self.settings_flat_dot_weight = int(optimizer.get("flat_dot_weight", DEFAULT_OPTIMIZE_FLAT_DOT_WEIGHT))
+        self.settings_spatial = resolve_optimize_spatial(optimizer)
+        self.settings_find_riven = bool(optimizer.get("find_riven", False))
+        self.settings_find_evolutions = bool(optimizer.get("find_evolutions", False))
+        self.settings_find_progenitor = bool(optimizer.get("find_progenitor", False))
+        self.settings_status = ""
+
+    def _refresh_settings_body_parts(self):
+        if self.settings_enemy == NONE:
+            self.settings_body_part_options = []
+            self.settings_body_part = ""
+            return
+        try:
+            enemy = configured_enemy(
+                self.settings_enemy,
+                level=self.settings_enemy_level,
+                steel_path=self.settings_enemy_steel_path,
+                empowered=self.settings_enemy_empowered,
+            )
+        except Exception:
+            self.settings_body_part_options = []
+            self.settings_body_part = ""
+            return
+        options = list(getattr(enemy, "body_parts", {}) or {})
+        self.settings_body_part_options = options
+        if self.settings_body_part not in options:
+            self.settings_body_part = options[0] if options else ""
+
+    def _settings_from_form(self) -> dict:
+        settings = default_settings()
+        settings["enemy"] = {
+            "faction": self.settings_enemy_faction,
+            "name": self.settings_enemy,
+            "level": int(self.settings_enemy_level),
+            "steel_path": bool(self.settings_enemy_steel_path),
+            "empowered": bool(self.settings_enemy_empowered),
+            "body_part": self.settings_body_part,
+        }
+        settings["optimizer"] = {
+            "maximize_target": self.settings_maximize_target,
+            "search_quality": self.settings_search_quality,
+            "dph_weight": int(self.settings_dph_weight),
+            "flat_dot_weight": int(self.settings_flat_dot_weight),
+            "spatial": self.settings_spatial,
+            "find_riven": bool(self.settings_find_riven),
+            "find_evolutions": bool(self.settings_find_evolutions),
+            "find_progenitor": bool(self.settings_find_progenitor),
+            "excluded_upgrades": list(self._settings()["optimizer"].get("excluded_upgrades") or []),
+            "default_exclusion_overrides": list(self._settings()["optimizer"].get("default_exclusion_overrides") or []),
+            "excluded_riven_stats": list(self._settings()["optimizer"].get("excluded_riven_stats") or []),
+            "default_riven_exclusion_overrides": list(self._settings()["optimizer"].get("default_riven_exclusion_overrides") or []),
+        }
+        return settings
+
     @rx.event
     def initialize(self):
         if self.initialized:
@@ -557,7 +961,281 @@ class CalculatorState(rx.State):
         self._refresh_all_riven_field_limits()
         self._refresh_damage_options()
         self._refresh_all_field_options()
+        self._refresh_saved_build_rows()
         return self._recalculate()
+
+    @rx.event
+    def hub_on_load(self):
+        if not self.initialized:
+            self.initialized = True
+            self._refresh_enemy_options()
+            self._refresh_weapon_options()
+            self._refresh_weapon_features()
+            self._refresh_upgrade_options()
+            self._refresh_all_riven_field_limits()
+            self._refresh_damage_options()
+            self._refresh_all_field_options()
+        if self.calculator_bootstrapped and self.active_build_id:
+            self._autosave_active_build()
+        self._refresh_saved_build_rows()
+        self.hub_status = ""
+        self.rename_build_id = ""
+        self.rename_build_name = ""
+        self.naming_new_build = False
+        self.new_build_name = ""
+
+    @rx.event
+    def settings_on_load(self):
+        if not self.initialized:
+            self.initialized = True
+            self._refresh_enemy_options()
+            self._refresh_weapon_options()
+            self._refresh_weapon_features()
+            self._refresh_upgrade_options()
+            self._refresh_all_riven_field_limits()
+            self._refresh_damage_options()
+            self._refresh_all_field_options()
+            self._refresh_saved_build_rows()
+        if self.calculator_bootstrapped and self.active_build_id:
+            self._autosave_active_build()
+        self._load_settings_form()
+
+    @rx.event
+    def calculator_on_load(self):
+        if not self.initialized:
+            self.initialized = True
+            self._refresh_enemy_options()
+            self._refresh_weapon_options()
+            self._refresh_weapon_features()
+            self._refresh_upgrade_options()
+            self._refresh_all_riven_field_limits()
+            self._refresh_damage_options()
+            self._refresh_all_field_options()
+            self._refresh_saved_build_rows()
+        if self.pending_build_id:
+            entry = find_build(self._builds(), self.pending_build_id)
+            self.pending_build_id = ""
+            if entry is not None:
+                self.active_build_id = str(entry["id"])
+                self.save_build_name = str(entry.get("name") or "")
+                self._apply_build_snapshot(entry.get("snapshot") or {})
+                self.calculator_bootstrapped = True
+                return self._recalculate()
+        if not self.calculator_bootstrapped:
+            return rx.redirect("/")
+
+    def _autosave_active_build(self) -> bool:
+        name = self.save_build_name.strip()
+        if not self.active_build_id or not name:
+            return False
+        entry = new_build_entry(name, self._build_snapshot())
+        entry["id"] = self.active_build_id
+        builds = upsert_build(self._builds(), entry, replace_id=self.active_build_id)
+        self._persist_builds(builds)
+        self._refresh_saved_build_rows()
+        return True
+
+    @rx.event
+    def exit_to_hub(self):
+        self._autosave_active_build()
+        return rx.redirect("/")
+
+    @rx.event
+    def begin_new_build(self):
+        self.naming_new_build = True
+        self.new_build_name = ""
+        self.hub_status = ""
+
+    @rx.event
+    def cancel_new_build(self):
+        self.naming_new_build = False
+        self.new_build_name = ""
+
+    @rx.event
+    def set_new_build_name(self, value: str):
+        self.new_build_name = value
+
+    @rx.event
+    def confirm_new_build(self):
+        name = self.new_build_name.strip()
+        if not name:
+            self.hub_status = "Enter a build name."
+            return
+        self._prepare_new_calculator_session()
+        entry = new_build_entry(name, self._build_snapshot())
+        builds = upsert_build(self._builds(), entry)
+        self.active_build_id = entry["id"]
+        self.save_build_name = name
+        self.naming_new_build = False
+        self.new_build_name = ""
+        self.calculator_bootstrapped = True
+        self.hub_status = ""
+        self._persist_builds(builds)
+        self._refresh_saved_build_rows()
+        self._recalculate()
+        return rx.redirect("/calculator")
+
+    @rx.event
+    def open_saved_build(self, build_id: str):
+        entry = find_build(self._builds(), build_id)
+        if entry is None:
+            self.hub_status = "Saved build not found."
+            self._refresh_saved_build_rows()
+            return
+        if self.calculator_bootstrapped and self.active_build_id and self.active_build_id != build_id:
+            self._autosave_active_build()
+        self.pending_build_id = str(entry["id"])
+        self.calculator_bootstrapped = False
+        self.hub_status = ""
+        return rx.redirect("/calculator")
+
+    @rx.event
+    def delete_saved_build(self, build_id: str):
+        builds = delete_build(self._builds(), build_id)
+        self._persist_builds(builds)
+        if self.active_build_id == build_id:
+            self.active_build_id = ""
+        if self.rename_build_id == build_id:
+            self.rename_build_id = ""
+            self.rename_build_name = ""
+        self.hub_status = "Build deleted."
+
+    @rx.event
+    def begin_rename_build(self, build_id: str):
+        entry = find_build(self._builds(), build_id)
+        if entry is None:
+            return
+        self.rename_build_id = build_id
+        self.rename_build_name = str(entry.get("name") or "")
+
+    @rx.event
+    def set_rename_build_name(self, value: str):
+        self.rename_build_name = value
+
+    @rx.event
+    def confirm_rename_build(self):
+        if not self.rename_build_id:
+            return
+        builds = rename_build(self._builds(), self.rename_build_id, self.rename_build_name)
+        self._persist_builds(builds)
+        self.rename_build_id = ""
+        self.rename_build_name = ""
+        self.hub_status = "Build renamed."
+
+    @rx.event
+    def cancel_rename_build(self):
+        self.rename_build_id = ""
+        self.rename_build_name = ""
+
+    @rx.event
+    def set_save_build_name(self, value: str):
+        self.save_build_name = value
+
+    @rx.event
+    def save_current_build(self):
+        if self._autosave_active_build():
+            self.save_build_status = "Build saved."
+            return
+        name = self.save_build_name.strip()
+        if not name:
+            self.save_build_status = "Enter a build name."
+            return
+        entry = new_build_entry(name, self._build_snapshot())
+        builds = upsert_build(self._builds(), entry)
+        self.active_build_id = entry["id"]
+        self._persist_builds(builds)
+        self._refresh_saved_build_rows()
+        self.save_build_status = "Build saved."
+
+    @rx.event
+    def set_settings_enemy_faction(self, value: str):
+        if value not in self.enemy_faction_options:
+            return
+        self.settings_enemy_faction = value
+        self.settings_enemy_options = [NONE, *enemies_for_faction(value)]
+        if self.settings_enemy not in self.settings_enemy_options:
+            self.settings_enemy = NONE
+        self._refresh_settings_body_parts()
+
+    @rx.event
+    def set_settings_enemy(self, value: str):
+        self.settings_enemy = value if value in self.settings_enemy_options else NONE
+        self._refresh_settings_body_parts()
+
+    @rx.event
+    def set_settings_enemy_level(self, value: str):
+        self.settings_enemy_level = max(1, parse_int(value, self.settings_enemy_level))
+        self._refresh_settings_body_parts()
+
+    @rx.event
+    def set_settings_enemy_steel_path(self, value: bool):
+        self.settings_enemy_steel_path = bool(value)
+        self._refresh_settings_body_parts()
+
+    @rx.event
+    def set_settings_enemy_empowered(self, value: bool):
+        self.settings_enemy_empowered = bool(value)
+        self._refresh_settings_body_parts()
+
+    @rx.event
+    def set_settings_body_part(self, value: str):
+        if value in self.settings_body_part_options:
+            self.settings_body_part = value
+
+    @rx.event
+    def set_settings_maximize_target(self, value: str):
+        if value in OPTIMIZE_MAXIMIZE_OPTIONS:
+            self.settings_maximize_target = value
+
+    @rx.event
+    def set_settings_search_quality(self, value: str):
+        if value in OPTIMIZE_SEARCH_OPTIONS:
+            self.settings_search_quality = value
+
+    @rx.event
+    def set_settings_dph_weight(self, value: str | int | float):
+        try:
+            weight = int(float(value))
+        except (TypeError, ValueError):
+            return
+        self.settings_dph_weight = max(0, min(weight, 100))
+
+    @rx.event
+    def set_settings_flat_dot_weight(self, value: str | int | float):
+        try:
+            weight = int(float(value))
+        except (TypeError, ValueError):
+            return
+        self.settings_flat_dot_weight = max(0, min(weight, 100))
+
+    @rx.event
+    def set_settings_spatial(self, value: str):
+        if value not in OPTIMIZE_SPATIAL_OPTIONS:
+            return
+        self.settings_spatial = value
+
+    @rx.event
+    def set_settings_find_riven(self, value: bool):
+        self.settings_find_riven = bool(value)
+
+    @rx.event
+    def set_settings_find_evolutions(self, value: bool):
+        self.settings_find_evolutions = bool(value)
+
+    @rx.event
+    def set_settings_find_progenitor(self, value: bool):
+        self.settings_find_progenitor = bool(value)
+
+    @rx.event
+    def save_settings(self):
+        self._persist_settings(self._settings_from_form())
+        self.settings_status = "Settings saved."
+
+    @rx.event
+    def reset_settings(self):
+        self._persist_settings(default_settings())
+        self._load_settings_form()
+        self.settings_status = "Settings reset to defaults."
 
     @rx.event
     def set_weapon_type(self, value: str):
@@ -693,6 +1371,8 @@ class CalculatorState(rx.State):
     @rx.event
     def set_progenitor_element(self, value: str):
         self.progenitor_element = value
+        if value not in {NO_EFFECT, NONE, ""} and self.progenitor_value <= 0:
+            self.progenitor_value = 0.6
         self._invalidate_optimizer_result()
         return self._recalculate()
 
@@ -769,7 +1449,7 @@ class CalculatorState(rx.State):
 
     @rx.event
     def toggle_slot_editor(self, index: int):
-        if not 0 <= index < len(SLOT_CONFIGS) or self.optimize_running:
+        if not 0 <= index < len(SLOT_CONFIGS) or self.optimize_busy:
             return
         should_open = not self.slot_editor_open[index]
         self.slot_editor_open = [should_open and position == index for position in range(len(SLOT_CONFIGS))]
@@ -941,6 +1621,13 @@ class CalculatorState(rx.State):
         self._refresh_optimizer_exclusion_options()
 
     @rx.event
+    def restore_optimize_excluded_upgrades(self):
+        self.optimize_default_exclusion_overrides = []
+        self.optimize_excluded_upgrades = []
+        self._invalidate_optimizer_result()
+        self._refresh_optimizer_exclusion_options()
+
+    @rx.event
     def set_optimize_pending_excluded_riven_stat(self, value: str):
         if value in self.optimize_riven_stat_exclusion_options:
             self.optimize_pending_excluded_riven_stat = value
@@ -968,6 +1655,13 @@ class CalculatorState(rx.State):
     def clear_optimize_excluded_riven_stats(self):
         defaults = [label for label in self.optimize_excluded_riven_stats if (field_name := self._riven_field_from_label(label)) and is_faction_damage_stat(field_name)]
         self.optimize_default_riven_exclusion_overrides = list(dict.fromkeys([*self.optimize_default_riven_exclusion_overrides, *defaults]))
+        self.optimize_excluded_riven_stats = []
+        self._invalidate_optimizer_result()
+        self._refresh_optimizer_exclusion_options()
+
+    @rx.event
+    def restore_optimize_excluded_riven_stats(self):
+        self.optimize_default_riven_exclusion_overrides = []
         self.optimize_excluded_riven_stats = []
         self._invalidate_optimizer_result()
         self._refresh_optimizer_exclusion_options()
@@ -1032,21 +1726,35 @@ class CalculatorState(rx.State):
         self._invalidate_optimizer_result()
 
     @rx.event
-    def set_optimize_aoe_weight(self, value: str | int | float):
-        try:
-            weight = int(float(value))
-        except (TypeError, ValueError):
+    def set_optimize_spatial(self, value: str):
+        if value not in OPTIMIZE_SPATIAL_OPTIONS:
             return
-        self.optimize_aoe_weight = max(0, min(weight, 100))
+        self.optimize_spatial = value
         self._invalidate_optimizer_result()
-
-    @rx.var
-    def optimize_single_target_weight(self) -> int:
-        return 100 - self.optimize_aoe_weight
 
     @rx.var
     def optimize_direct_weight(self) -> int:
         return 100 - self.optimize_flat_dot_weight
+
+    @rx.var
+    def optimize_busy(self) -> bool:
+        return self.optimize_running or bool(self.optimize_cancel_token)
+
+    @rx.var
+    def optimize_upgrade_exclusions_customized(self) -> bool:
+        if self.optimize_default_exclusion_overrides:
+            return True
+        return any(not optimizer_excludes_upgrade_by_default(name) for name in self.optimize_excluded_upgrades)
+
+    @rx.var
+    def optimize_riven_exclusions_customized(self) -> bool:
+        if self.optimize_default_riven_exclusion_overrides:
+            return True
+        for label in self.optimize_excluded_riven_stats:
+            field_name = self._riven_field_from_label(label)
+            if not field_name or not is_faction_damage_stat(field_name):
+                return True
+        return False
 
     @rx.var
     def any_slot_editor_open(self) -> bool:
@@ -1059,7 +1767,7 @@ class CalculatorState(rx.State):
 
     @rx.event
     def abort_optimization(self):
-        if not self.optimize_running:
+        if not self.optimize_busy:
             return
         cancel_event = _OPTIMIZE_CANCEL_EVENTS.get(self.optimize_cancel_token)
         if cancel_event is not None:
@@ -1077,7 +1785,7 @@ class CalculatorState(rx.State):
         import time
 
         async with self:
-            if self.selected_weapon == NONE or self.selected_enemy == NONE or self.optimize_running:
+            if self.selected_weapon == NONE or self.selected_enemy == NONE or self.optimize_busy:
                 return
             self.optimize_running = True
             self.slot_editor_open = [False for _ in SLOT_CONFIGS]
@@ -1139,7 +1847,7 @@ class CalculatorState(rx.State):
                 body_part=self.optimize_body_part or None,
                 flat_dot_weight=self.optimize_flat_dot_weight / 100.0,
                 dph_weight=self.optimize_dph_weight / 100.0,
-                aoe_weight=self.optimize_aoe_weight / 100.0,
+                spatial=self.optimize_spatial,
                 cancel_event=cancel_event,
                 stance_combo=self.selected_stance_combo if self.stance_combo_available else "neutral",
                 ability_strength=self._ability_strength_multiplier(),
@@ -1173,6 +1881,9 @@ class CalculatorState(rx.State):
         loop = asyncio.get_running_loop()
         fut = loop.run_in_executor(None, worker)
 
+        def owns_optimize_run() -> bool:
+            return self.optimize_cancel_token == cancel_token
+
         while True:
             await asyncio.sleep(0.5)
             latest_progress = None
@@ -1190,10 +1901,13 @@ class CalculatorState(rx.State):
                 _, progress = latest_progress
                 best_value = max(best_value, float(progress.best_score))
             async with self:
-                if self.optimize_revision == revision:
+                # Only the active run may mutate optimizer UI. An aborted/superseded
+                # worker can still finish later; clearing running there unlocked the
+                # controls while a newer search kept updating progress.
+                if owns_optimize_run() and self.optimize_revision == revision:
                     if latest_progress is not None:
                         self.optimize_phase = _describe_optimize_phase(progress.stage)
-                        self.optimize_progress = _optimizer_progress(progress.fraction)
+                        self.optimize_progress = _optimizer_progress_from_snapshot(progress)
                         self.optimize_progress_width = f"{self.optimize_progress:.1f}%"
                         self.optimize_evaluations = int(progress.evaluations)
                         self.optimize_evaluation_budget = int(progress.evaluation_budget)
@@ -1204,9 +1918,10 @@ class CalculatorState(rx.State):
                 continue
             if terminal[0] == "done":
                 result = terminal[1]
+                apply_result = False
                 async with self:
-                    self.optimize_running = False
-                    if self.optimize_revision == revision:
+                    if owns_optimize_run() and self.optimize_revision == revision:
+                        apply_result = True
                         self._apply_optimize_result(result)
                         self.optimize_status = result.message
                         best_value = max(best_value, float(result.total_dps))
@@ -1218,24 +1933,25 @@ class CalculatorState(rx.State):
                 await asyncio.sleep(0)
                 refresh = None
                 try:
-                    async with self:
-                        if self.optimize_revision == revision:
-                            try:
-                                self._ensure_selected_upgrades_in_options()
-                                self._refresh_all_riven_field_limits()
-                                self._refresh_slot_field_options()
-                                refresh = self._recalculate()
-                                self.optimize_phase = "Complete"
-                                self.optimize_elapsed = _format_elapsed(result.elapsed_seconds)
-                            except Exception as exc:
-                                self.optimize_phase = "Complete"
-                                self.optimize_status = f"Build applied with errors: {type(exc).__name__}: {exc}"
-                                self.optimize_elapsed = _format_elapsed(result.elapsed_seconds)
+                    if apply_result:
+                        async with self:
+                            if owns_optimize_run() and self.optimize_revision == revision:
+                                try:
+                                    self._ensure_selected_upgrades_in_options()
+                                    self._refresh_all_riven_field_limits()
+                                    self._refresh_slot_field_options()
+                                    refresh = self._recalculate()
+                                    self.optimize_phase = "Complete"
+                                    self.optimize_elapsed = _format_elapsed(result.elapsed_seconds)
+                                except Exception as exc:
+                                    self.optimize_phase = "Complete"
+                                    self.optimize_status = f"Build applied with errors: {type(exc).__name__}: {exc}"
+                                    self.optimize_elapsed = _format_elapsed(result.elapsed_seconds)
                 finally:
                     async with self:
-                        self.optimize_running = False
                         _OPTIMIZE_CANCEL_EVENTS.pop(cancel_token, None)
-                        if self.optimize_cancel_token == cancel_token:
+                        if owns_optimize_run():
+                            self.optimize_running = False
                             self.optimize_cancel_token = ""
                 await fut
                 return refresh
@@ -1243,25 +1959,28 @@ class CalculatorState(rx.State):
                 exc = terminal[1]
                 async with self:
                     _OPTIMIZE_CANCEL_EVENTS.pop(cancel_token, None)
-                    if self.optimize_cancel_token == cancel_token:
+                    if owns_optimize_run():
                         self.optimize_cancel_token = ""
-                    if self.optimize_revision == revision:
-                        if isinstance(exc, InterruptedError):
-                            self.optimize_status = "Optimization aborted."
-                            self.optimize_phase = "Aborted"
-                        else:
-                            self.optimize_status = f"{type(exc).__name__}: {exc}"
-                            self.optimize_phase = "Failed"
-                    self.optimize_running = False
+                        self.optimize_running = False
+                        if self.optimize_revision == revision:
+                            if isinstance(exc, InterruptedError):
+                                self.optimize_status = "Optimization aborted."
+                                self.optimize_phase = "Aborted"
+                            else:
+                                self.optimize_status = f"{type(exc).__name__}: {exc}"
+                                self.optimize_phase = "Failed"
                 await fut
                 return
             if fut.done() and terminal is None and latest_progress is None:
                 exc = fut.exception()
                 async with self:
-                    if exc and self.optimize_revision == revision:
-                        self.optimize_status = f"{type(exc).__name__}: {exc}"
-                        self.optimize_phase = "Failed"
-                    self.optimize_running = False
+                    _OPTIMIZE_CANCEL_EVENTS.pop(cancel_token, None)
+                    if owns_optimize_run():
+                        self.optimize_cancel_token = ""
+                        self.optimize_running = False
+                        if exc and self.optimize_revision == revision:
+                            self.optimize_status = f"{type(exc).__name__}: {exc}"
+                            self.optimize_phase = "Failed"
                 return
 
     @rx.event
@@ -1584,7 +2303,12 @@ class CalculatorState(rx.State):
         self.slot_policies = list(result.slot_policies)
         self.slot_riven_rolls = list(result.riven_rolls)
         if result.progenitor_optimized:
-            self.progenitor_element = result.progenitor_element
+            element = str(result.progenitor_element or NO_EFFECT).strip().lower()
+            if element in PROGENITOR_ELEMENT_OPTIONS:
+                self.progenitor_element = element
+                self.progenitor_value = float(result.progenitor_value) if result.progenitor_value > 0 else 0.6
+            else:
+                self.progenitor_element = NO_EFFECT
         max_ranks, max_stacks = list(self.slot_max_ranks), list(self.slot_max_stacks)
         all_fields = copy.deepcopy(self.slot_fields)
         for index, config in enumerate(SLOT_CONFIGS):
@@ -2280,9 +3004,6 @@ class CalculatorState(rx.State):
         self.ranged_result_metrics = []
         self.misc_result_metrics = []
         self.result_metrics = []
-        self.damage_result_rows = []
-        self.contribution_result_rows = []
-        self.summary_result_rows = []
         self.result_summary = ""
         self.result_status_summary = ""
         self.result_contribution_summary = ""
@@ -2292,7 +3013,8 @@ class CalculatorState(rx.State):
 
     def _build_resolved_weapon(self, target):
         slot_upgrades = [self._slot_upgrade(index) for index in range(len(SLOT_CONFIGS))]
-        progenitor = None if not self._supports_progenitor() or self.progenitor_element == NO_EFFECT or self.progenitor_value <= 0 else Progenitor(self.progenitor_element, self.progenitor_value)
+        progenitor_bonus = self.progenitor_value if self.progenitor_value > 0 else 0.6
+        progenitor = None if not self._supports_progenitor() or self.progenitor_element in {NO_EFFECT, NONE, ""} else Progenitor(element=self.progenitor_element, bonus=progenitor_bonus)
         external = self._custom_upgrade_from_fields("External Buffs", self.external_fields)
         upgrades = [upgrade for selected, upgrade in zip(self.slot_selected_upgrades, slot_upgrades) if selected != NONE]
         if is_non_empty_upgrade(external):
@@ -2330,7 +3052,7 @@ class CalculatorState(rx.State):
             return
         target = self._target_for_calculation()
         resolved, upgrades, _slot_upgrades = self._build_resolved_weapon(target)
-        contribution_lookup, text, rows = library_contribution_bundle(resolved, target_metric="total_dps")
+        contribution_lookup, text, _rows = library_contribution_bundle(resolved)
         contribution_map = contribution_lookup_map(contribution_lookup)
         contributions = []
         for index, config in enumerate(SLOT_CONFIGS):
@@ -2338,7 +3060,6 @@ class CalculatorState(rx.State):
             contribution_name = config["label"] if selected == NONE else selected
             contributions.append(format_contribution(contribution_value_for_name(contribution_map, contribution_name)))
         self.slot_contributions = contributions
-        self.contribution_result_rows = rows
         self.result_contribution_summary = text
         self.contributions_pending = False
 
@@ -2362,11 +3083,11 @@ class CalculatorState(rx.State):
                 return
 
         def compute():
-            return library_contribution_bundle(resolved, target_metric="total_dps")
+            return library_contribution_bundle(resolved)
 
         loop = asyncio.get_running_loop()
         try:
-            contribution_lookup, text, rows = await loop.run_in_executor(None, compute)
+            contribution_lookup, text, _rows = await loop.run_in_executor(None, compute)
         except Exception as exc:
             async with self:
                 if self.contribution_revision == revision:
@@ -2383,7 +3104,6 @@ class CalculatorState(rx.State):
         async with self:
             if self.contribution_revision == revision:
                 self.slot_contributions = contributions
-                self.contribution_result_rows = rows
                 self.result_contribution_summary = text
                 self.contributions_pending = False
 
@@ -2432,10 +3152,8 @@ class CalculatorState(rx.State):
             self.misc_result_metrics = [] if self.selected_weapon_type == "Melee" else ranged_misc_metrics(weapon)
             self.result_metrics = self.main_result_metrics + self.weak_point_result_metrics + self.resistant_result_metrics + self.misc_result_metrics
             self.ranged_result_metrics = self.result_metrics
-            self.damage_result_rows = effective_damage_rows(weapon, melee=self.selected_weapon_type == "Melee")
             self.result_summary = result_summary(weapon)
             self.result_status_summary = result_status_summary(weapon)
-            self.summary_result_rows = result_summary_table_rows(weapon)
             self.contribution_revision += 1
             self.contributions_pending = True
             self.result_contribution_summary = "Computing upgrade contributions…"
