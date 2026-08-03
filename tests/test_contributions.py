@@ -1,9 +1,9 @@
 import pytest
 
-from warframe_damage_calculator import Calculator
+from warframe_damage_calculator import Calculator, Formatter
 
 from warframe_reflex.data import database_enemy, database_upgrade
-from warframe_reflex.engine import configured_weapon, contribution_lookup_for_weapon, result_contributions_summary
+from warframe_reflex.engine import configured_weapon, contribution_lookup_for_weapon, library_contribution_bundle, result_contributions_summary
 
 
 def test_current_library_contributions_use_library_removal_scores():
@@ -16,7 +16,10 @@ def test_current_library_contributions_use_library_removal_scores():
     _calculator, result = resolved
     library = Calculator(result.weapon, result.target, result.loadout).contributions(attack=result.selected_attack, metric="total_dps", body_part=result.selected_bodypart, state=result.state)
     assert dict(contributions) == library.contribution
-    summary = result_contributions_summary(resolved)
+    lookup, summary = library_contribution_bundle(resolved)
+    assert dict(lookup) == library.contribution
+    assert summary == Formatter(result).format_contributions(library, metric="total_dps", body_part=result.selected_bodypart)
+    assert summary == result_contributions_summary(resolved)
     assert "Serration" in summary
     assert "Vital Sense" in summary
     assert "Relative Contribution" in summary

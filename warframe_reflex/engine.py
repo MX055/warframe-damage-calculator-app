@@ -658,6 +658,24 @@ def compute_contribution_proportions(
     raise RuntimeError("compute_contribution_proportions is obsolete; use contribution_lookup_for_weapon with a library Calculator.resolve() result")
 
 
+def _normalize_contribution_metric(target_metric: str) -> str:
+    return target_metric.replace("total_weakpoint_", "total_").replace("flat_weakpoint_", "direct_").replace("total_resistant_", "total_").replace("flat_resistant_", "direct_").replace("flat_", "direct_")
+
+
+def library_contribution_bundle(resolved, target_metric: str = "total_dps"):
+    """One library Calculator.contributions() pass → lookup rows + Formatter table text."""
+    if not (isinstance(resolved, tuple) and len(resolved) == 2):
+        return [], ""
+    _calculator, result = resolved
+    if not result.loadout.upgrades and result.loadout.progenitor is None:
+        return [], ""
+    metric = _normalize_contribution_metric(target_metric)
+    contribution_result = Calculator(result.weapon, result.target, result.loadout).contributions(attack=result.selected_attack, metric=metric, body_part=result.selected_bodypart, state=result.state)
+    ordered = sorted(contribution_result.contribution.items(), key=lambda item: item[1], reverse=True)
+    text = Formatter(result).format_contributions(contribution_result, metric=metric, body_part=result.selected_bodypart)
+    return ordered, text
+
+
 def contribution_lookup_for_weapon(
     resolved,
     weapon_type_name: str,
@@ -666,13 +684,8 @@ def contribution_lookup_for_weapon(
     target_metric: str = "total_dps",
 ):
     if isinstance(resolved, tuple) and len(resolved) == 2:
-        _calculator, result = resolved
-        if not result.loadout.upgrades and result.loadout.progenitor is None:
-            return []
-        metric = target_metric.replace("total_weakpoint_", "total_").replace("flat_weakpoint_", "direct_").replace("total_resistant_", "total_").replace("flat_resistant_", "direct_").replace("flat_", "direct_")
-        # Match Formatter.contributions(): rebuild from the stored result inputs.
-        contribution_result = Calculator(result.weapon, result.target, result.loadout).contributions(attack=result.selected_attack, metric=metric, body_part=result.selected_bodypart, state=result.state)
-        return list(contribution_result.contribution.items())
+        lookup, _text = library_contribution_bundle(resolved, target_metric=target_metric)
+        return lookup
     if not upgrades:
         return []
     removal = getattr(getattr(resolved, "results", None), "removal_contributions", None)
@@ -687,10 +700,8 @@ def format_contribution(value: float | None) -> str:
 
 
 def contribution_rows(contribution_lookup) -> list[ContributionRow]:
-    return [
-        ContributionRow(contribution_key_name(key), f"{value:.2%}")
-        for key, value in contribution_items(contribution_lookup)
-    ]
+    items = sorted(contribution_items(contribution_lookup), key=lambda item: item[1], reverse=True)
+    return [ContributionRow(contribution_key_name(key), f"{value:+.2%}") for key, value in items]
 
 
 def format_upgrade_contributions(contribution_lookup) -> str:
@@ -754,4 +765,5 @@ def result_summary(resolved) -> str:
 
 
 def result_contributions_summary(resolved) -> str:
-    return Formatter(resolved[1]).contributions()
+    _lookup, text = library_contribution_bundle(resolved)
+    return text

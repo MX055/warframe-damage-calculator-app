@@ -1661,21 +1661,20 @@ def result_tabs() -> rx.Component:
         ),
         rx.tabs.content(
             rx.cond(
-                CalculatorState.contribution_result_rows.length() > 0,
-                rx.vstack(
-                    rx.foreach(
-                        CalculatorState.contribution_result_rows,
-                        contribution_row,
+                CalculatorState.contributions_pending,
+                rx.text(CalculatorState.result_contribution_summary, class_name="empty-text"),
+                rx.cond(
+                    CalculatorState.result_contribution_summary != "",
+                    rx.el.pre(
+                        CalculatorState.result_contribution_summary,
+                        class_name="plain-text-summary",
                     ),
-                    width="100%",
-                    gap="1",
+                    rx.text("No upgrade contributions.", class_name="empty-text"),
                 ),
-                rx.text("No upgrade contributions.", class_name="empty-text"),
             ),
             value="contributions",
             padding_top="1rem",
-        ),
-        rx.tabs.content(
+        ),        rx.tabs.content(
             rx.vstack(
                 rx.text("Weapon Summary", class_name="card-title"),
                 rx.el.pre(

@@ -76,7 +76,6 @@ from .engine import (
     clamp_number,
     configured_enemy,
     configured_weapon,
-    contribution_lookup_for_weapon,
     contribution_lookup_map,
     contribution_rows,
     contribution_value_for_name,
@@ -86,13 +85,13 @@ from .engine import (
     format_contribution,
     is_field_allowed,
     is_non_empty_upgrade,
+    library_contribution_bundle,
     main_metrics,
     parse_float,
     parse_database_entry,
     parse_int,
     progenitor_upgrade,
     ranged_misc_metrics,
-    result_contributions_summary,
     result_summary,
     resistant_metrics,
     upgrade_field_input_config,
@@ -2348,7 +2347,7 @@ class CalculatorState(rx.State):
             return
         target = self._target_for_calculation()
         resolved, upgrades, _slot_upgrades = self._build_resolved_weapon(target)
-        contribution_lookup = contribution_lookup_for_weapon(resolved, self.selected_weapon_type, None, upgrades, target_metric="total_dps")
+        contribution_lookup, text = library_contribution_bundle(resolved, target_metric="total_dps")
         contribution_map = contribution_lookup_map(contribution_lookup)
         contributions = []
         for index, config in enumerate(SLOT_CONFIGS):
@@ -2357,7 +2356,7 @@ class CalculatorState(rx.State):
             contributions.append(format_contribution(contribution_value_for_name(contribution_map, contribution_name)))
         self.slot_contributions = contributions
         self.contribution_result_rows = contribution_rows(contribution_lookup)
-        self.result_contribution_summary = result_contributions_summary(resolved)
+        self.result_contribution_summary = text
         self.contributions_pending = False
 
     @rx.event(background=True)
@@ -2370,10 +2369,9 @@ class CalculatorState(rx.State):
                 self.contributions_pending = False
                 return
             selected_upgrades = list(self.slot_selected_upgrades)
-            weapon_type = self.selected_weapon_type
             try:
                 target = self._target_for_calculation()
-                resolved, upgrades, _slot_upgrades = self._build_resolved_weapon(target)
+                resolved, _upgrades, _slot_upgrades = self._build_resolved_weapon(target)
             except Exception as exc:
                 if self.contribution_revision == revision:
                     self.result_contribution_summary = f"{type(exc).__name__}: {exc}"
@@ -2381,9 +2379,7 @@ class CalculatorState(rx.State):
                 return
 
         def compute():
-            lookup = contribution_lookup_for_weapon(resolved, weapon_type, None, upgrades, target_metric="total_dps")
-            text = result_contributions_summary(resolved)
-            return lookup, text
+            return library_contribution_bundle(resolved, target_metric="total_dps")
 
         loop = asyncio.get_running_loop()
         try:
