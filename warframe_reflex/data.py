@@ -4,6 +4,7 @@ import copy
 import json
 import re
 import sys
+from collections.abc import Mapping
 from functools import lru_cache
 from pathlib import Path
 
@@ -143,15 +144,36 @@ def database_conditional_info(upgrade_name: str | None, *, is_arcane_slot: bool)
     return bool(readable), readable
 
 
+def _attack_child_keys(attacks: Mapping[str, object]) -> set[str]:
+    """Return attack keys that are linked children of another attack."""
+    child_keys: set[str] = set()
+    for attack in attacks.values():
+        if not isinstance(attack, Mapping):
+            continue
+        for child in attack.get("children") or ():
+            child_keys.add(str(child))
+        links = attack.get("links") or {}
+        if not isinstance(links, Mapping):
+            continue
+        children = links.get("children") or {}
+        names = children.get("names") if isinstance(children, Mapping) else None
+        if not names:
+            continue
+        expected = {str(item).casefold() for item in names}
+        for other_key, other in attacks.items():
+            if not isinstance(other, Mapping):
+                continue
+            other_name = str(other.get("name") or "")
+            if other_key.casefold() in expected or other_name.casefold() in expected:
+                child_keys.add(other_key)
+    return child_keys
+
+
 def weapon_attack_modes(weapon_name: str | None) -> tuple[str, ...]:
     metadata = raw_weapon_metadata("", weapon_name)
     attacks = metadata.get("attacks") or {}
-    child_names = {
-        child
-        for attack in attacks.values()
-        for child in (attack.get("children", []) if isinstance(attack, dict) else [])
-    }
-    selectable = [name for name in attacks if name not in child_names] or list(attacks)
+    child_keys = _attack_child_keys(attacks)
+    selectable = [name for name in attacks if name not in child_keys] or list(attacks)
     return tuple(name.replace("_", " ").title() for name in selectable)
 
 

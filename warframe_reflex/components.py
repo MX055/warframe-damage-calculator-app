@@ -1336,7 +1336,22 @@ def optimizer_run_controls() -> rx.Component:
                     class_name="optimizer-balance-slider", aria_label="Flat DOT damage weight",
                 ),
             ),
-            columns="repeat(3, minmax(0, 1fr))",
+            labeled_control(
+                rx.hstack(
+                    rx.text(rx.text.strong("Single-Target "), CalculatorState.optimize_single_target_weight, "%", class_name="optimizer-help"),
+                    rx.spacer(),
+                    rx.text(rx.text.strong("AoE "), CalculatorState.optimize_aoe_weight, "%", class_name="optimizer-help"),
+                    width="100%",
+                    align="center",
+                ),
+                rx.el.input(
+                    type="range", min="0", max="100", step="5",
+                    value=CalculatorState.optimize_aoe_weight,
+                    on_change=CalculatorState.set_optimize_aoe_weight, disabled=disabled,
+                    class_name="optimizer-balance-slider", aria_label="AoE damage mass weight",
+                ),
+            ),
+            columns="repeat(4, minmax(0, 1fr))",
             class_name="optimizer-maximize-row",
             width="100%",
             gap="3",

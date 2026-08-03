@@ -366,6 +366,7 @@ class CalculatorState(rx.State):
     optimize_body_part_options: list[str] = rx.field(default_factory=list)
     optimize_body_part: str = ""
     optimize_flat_dot_weight: int = 50
+    optimize_aoe_weight: int = 100
     optimize_maximize_options: list[str] = rx.field(default_factory=lambda: list(OPTIMIZE_MAXIMIZE_OPTIONS))
     optimize_search_options: list[str] = rx.field(default_factory=lambda: list(OPTIMIZE_SEARCH_OPTIONS))
     optimize_status: str = ""
@@ -535,6 +536,7 @@ class CalculatorState(rx.State):
         self.optimize_body_part_options = []
         self.optimize_body_part = ""
         self.optimize_flat_dot_weight = 50
+        self.optimize_aoe_weight = 100
         self.optimize_excluded_upgrades = []
         self.optimize_default_exclusion_overrides = []
         self.optimize_upgrade_exclusion_options = []
@@ -1061,6 +1063,19 @@ class CalculatorState(rx.State):
         self.optimize_flat_dot_weight = max(0, min(weight, 100))
         self._invalidate_optimizer_result()
 
+    @rx.event
+    def set_optimize_aoe_weight(self, value: str | int | float):
+        try:
+            weight = int(float(value))
+        except (TypeError, ValueError):
+            return
+        self.optimize_aoe_weight = max(0, min(weight, 100))
+        self._invalidate_optimizer_result()
+
+    @rx.var
+    def optimize_single_target_weight(self) -> int:
+        return 100 - self.optimize_aoe_weight
+
     @rx.var
     def optimize_direct_weight(self) -> int:
         return 100 - self.optimize_flat_dot_weight
@@ -1157,6 +1172,7 @@ class CalculatorState(rx.State):
                 body_part=self.optimize_body_part or None,
                 flat_dot_weight=self.optimize_flat_dot_weight / 100.0,
                 dph_weight=self.optimize_dph_weight / 100.0,
+                aoe_weight=self.optimize_aoe_weight / 100.0,
                 cancel_event=cancel_event,
                 stance_combo=self.selected_stance_combo if self.stance_combo_available else "neutral",
                 ability_strength=self._ability_strength_multiplier(),

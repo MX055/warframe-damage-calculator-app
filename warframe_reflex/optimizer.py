@@ -57,6 +57,7 @@ class OptimizeRequest:
     body_part: str | None = None
     flat_dot_weight: float = 0.5
     dph_weight: float = 0.5
+    aoe_weight: float = 1.0
     cancel_event: threading.Event | None = None
     stance_combo: str = "neutral"
     ability_strength: float | None = None
@@ -131,9 +132,23 @@ def _load_slot(spec: SlotSpec):
     return item
 
 
+def _result_damage_mass(result) -> float:
+    average = result.aggregate.average
+    total_dph = average.direct_dph + average.dot_dph
+    if total_dph <= 0:
+        return 1.0
+    weighted = sum((attack.average.direct_dph + attack.average.dot_dph) * (attack.spatial.damage_mass if attack.spatial is not None else 1.0) for attack in result.attacks.values())
+    return weighted / total_dph
+
+
+def _effective_damage_mass(result, aoe_weight: float) -> float:
+    """Blend damage mass toward 1.0 so aoe_weight=0 ignores AoE and 1.0 uses full mass."""
+    return 1.0 + float(aoe_weight) * (_result_damage_mass(result) - 1.0)
+
+
 def _metric_for(request: OptimizeRequest):
     target = request.maximize_target
-    if target == "balanced_total_dps_dph" and request.dph_weight == 0.5 and request.flat_dot_weight == 0.5:
+    if target == "balanced_total_dps_dph" and request.dph_weight == 0.5 and request.flat_dot_weight == 0.5 and request.aoe_weight == 1.0:
         return default_metric
 
     def metric(result):
@@ -142,11 +157,16 @@ def _metric_for(request: OptimizeRequest):
             "total_dps": avg.total_dps, "flat_dps": avg.direct_dps, "flat_dotps": avg.dot_dps,
             "total_dph": avg.total_dph, "flat_dph": avg.direct_dph, "flat_dotph": avg.dot_dph,
         }
+        mass = _effective_damage_mass(result, request.aoe_weight)
         if target == "balanced_total_dps_dph":
             dps, dph = max(avg.total_dps, 0.0), max(avg.total_dph, 0.0)
-            return (dps ** (1 - request.dph_weight) * dph ** request.dph_weight) if dps > 0 and dph > 0 else 0.0
+            if dps <= 0 or dph <= 0 or mass <= 0:
+                return 0.0
+            # Match default_metric's three-factor geometric mean when dph_weight=0.5.
+            return (dps ** (2 * (1 - request.dph_weight)) * dph ** (2 * request.dph_weight) * mass) ** (1 / 3)
         base = target.replace("total_weakpoint_", "total_").replace("flat_weakpoint_", "flat_").replace("total_resistant_", "total_").replace("flat_resistant_", "flat_")
-        return float(aliases.get(base, avg.total_dps))
+        value = float(aliases.get(base, avg.total_dps))
+        return value * mass if value > 0 and mass > 0 else 0.0
     return metric
 
 
