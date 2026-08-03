@@ -50,14 +50,31 @@ class MetricRow:
 @dataclass
 class DamageResultRow:
     damage_type: str
-    damage: str
-    weight: str = ""
-    direct_weight: str = ""
-    explosion_weight: str = ""
-    proc_chance: str = ""
+    damage: str = "—"
+    weight: str = "—"
+    forced_procs: str = "—"
+    proc_rate: str = "—"
+    explosion_damage: str = "—"
+    explosion_weight: str = "—"
+    explosion_forced_procs: str = "—"
+    explosion_proc_rate: str = "—"
 
 
 @dataclass
 class ContributionRow:
+    rank: str
+    kind: str
     name: str
-    value: str
+    share: str
+    removal: str
+    impact: str
+
+
+@dataclass
+class SummaryTableRow:
+    stat: str
+    base: str
+    modded: str
+    effective: str
+    average: str
+    section_start: bool = False

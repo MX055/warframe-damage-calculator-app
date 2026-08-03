@@ -6,13 +6,14 @@ from collections.abc import Mapping
 from typing import Iterable
 
 from warframe_damage_calculator import Arcane, Calculator, Dist, Effect, Enemy, Formatter, Loadout, Mod, Progenitor, State, Upgrade, UpgradeStats
+from warframe_damage_calculator.domain.attacks import match_related_keys
 
 class Build(tuple):
     def __new__(cls, *items): return super().__new__(cls, items)
 
 from .constants import INITIAL_COMBO_RUNTIME, UPGRADE_BOOL_FIELDS, WEAPON_TYPES
 from .data import database_enemy, database_weapon
-from .models import ContributionRow, DamageResultRow, DisplayRow, MetricRow
+from .models import ContributionRow, DamageResultRow, DisplayRow, MetricRow, SummaryTableRow
 
 
 FIELD_LABEL_OVERRIDES = {
@@ -243,35 +244,7 @@ def custom_upgrade_from_entry(
     return upgrade
 
 
-def custom_enemy_from_entry(text: str, *, level: int | None = None, steel_path: bool | None = None, empowered: bool | None = None) -> Enemy:
-    entry = parse_database_entry(text, default_name="Custom Enemy", default_type="enemy")
-    entry.pop("type", None)
-    for key in ("stats", "bodyparts", "modifiers"):
-        if key in entry and not isinstance(entry[key], Mapping):
-            raise ValueError(f"Custom Enemy {key} must be a JSON object.")
-    runtime = entry.get("runtime")
-    if runtime is not None and not isinstance(runtime, Mapping):
-        raise ValueError("Custom Enemy runtime must be a JSON object.")
-    entry["runtime"] = {"level": max(int(entry.get("base_level", 1)), 1), "steel_path": False, "empowered": False, **dict(runtime or {})}
-    if level is not None:
-        entry["runtime"]["level"] = level
-    if steel_path is not None:
-        entry["runtime"]["steel_path"] = steel_path
-    if empowered is not None:
-        entry["runtime"]["empowered"] = empowered
-    enemy = Enemy(entry)
-    pools = enemy.data.stats
-    if max(float(pools.health), float(pools.shields), float(pools.overguard)) <= 0:
-        raise ValueError("Custom Enemy must have nonzero health, shields, or overguard.")
-    enemy.results.resolve()
-    return enemy
-
-
-def configured_enemy(enemy_name: str, *, custom_enemy: bool, custom_entry: str | None, level: int, steel_path: bool, empowered: bool) -> Enemy:
-    if custom_enemy:
-        if not custom_entry or not custom_entry.strip():
-            raise ValueError("Custom Enemy JSON is required.")
-        return custom_enemy_from_entry(custom_entry)
+def configured_enemy(enemy_name: str, *, level: int, steel_path: bool, empowered: bool) -> Enemy:
     if not enemy_name or enemy_name == "None":
         return Enemy()
     enemy = database_enemy(enemy_name, level=level, steel_path=steel_path, empowered=empowered)
@@ -665,15 +638,18 @@ def _normalize_contribution_metric(target_metric: str) -> str:
 def library_contribution_bundle(resolved, target_metric: str = "total_dps"):
     """Lookup rows from Calculator.contributions(); summary text from Formatter.contributions()."""
     if not (isinstance(resolved, tuple) and len(resolved) == 2):
-        return [], ""
+        return [], "", []
     _calculator, result = resolved
     if not result.loadout.upgrades and result.loadout.progenitor is None:
-        return [], ""
+        return [], "", []
     metric = _normalize_contribution_metric(target_metric)
     contribution_result = Calculator(result.weapon, result.target, result.loadout).contributions(attack=result.selected_attack, metric=metric, body_part=result.selected_bodypart, state=result.state)
     ordered = sorted(contribution_result.contribution.items(), key=lambda item: item[1], reverse=True)
-    text = Formatter(result).contributions(metric=metric, body_part=result.selected_bodypart)
-    return ordered, text
+    formatter = Formatter(result)
+    table = formatter.contribution_table(metric=metric, body_part=result.selected_bodypart, contributions=contribution_result)
+    text = "" if table is None else formatter._table(table[1], table[2], title=table[0])
+    rows = [] if table is None else [ContributionRow(*row) for row in table[2]]
+    return ordered, text, rows
 
 
 def contribution_lookup_for_weapon(
@@ -684,7 +660,7 @@ def contribution_lookup_for_weapon(
     target_metric: str = "total_dps",
 ):
     if isinstance(resolved, tuple) and len(resolved) == 2:
-        lookup, _text = library_contribution_bundle(resolved, target_metric=target_metric)
+        lookup, _text, _rows = library_contribution_bundle(resolved, target_metric=target_metric)
         return lookup
     if not upgrades:
         return []
@@ -700,8 +676,12 @@ def format_contribution(value: float | None) -> str:
 
 
 def contribution_rows(contribution_lookup) -> list[ContributionRow]:
+    """Fallback name/share-only rows when full Formatter table data is unavailable."""
     items = sorted(contribution_items(contribution_lookup), key=lambda item: item[1], reverse=True)
-    return [ContributionRow(contribution_key_name(key), f"{value:+.2%}") for key, value in items]
+    return [
+        ContributionRow(str(rank), "", contribution_key_name(key), f"{value:+.2%}", "", "")
+        for rank, (key, value) in enumerate(items, 1)
+    ]
 
 
 def format_upgrade_contributions(contribution_lookup) -> str:
@@ -743,25 +723,73 @@ def ranged_misc_metrics(resolved) -> list[MetricRow]:
     return [MetricRow("Average Fire Rate", f"{selected.fire_rate:,.2f}"), MetricRow("Procs / Shot", f"{sum(selected.status_chance for _ in [0]):,.2f}")]
 
 
-def effective_damage_rows(resolved, *, melee: bool) -> list[DamageResultRow]:
+def _status_summary_cells(attack, damage_type: str) -> tuple[str, str, str, str]:
+    if attack is None:
+        return ("—", "—", "—", "—")
+    damage = attack.effective.damage
+    forced = attack.effective.forced_procs
+    status_chance = float(attack.effective.status_chance)
+    return (
+        f"{damage.get(damage_type, 0.0):,.2f}",
+        f"{damage.weight(damage_type):,.2f}",
+        f"{forced.get(damage_type, 0.0):.1%}",
+        f"{damage.weight(damage_type) * status_chance + forced.get(damage_type, 0.0):.1%}",
+    )
+
+
+def _related_explosion_attack(result):
+    selected_definition = result.weapon.attacks.get(result.selected_attack)
+    if selected_definition is None:
+        return None
+    children = selected_definition.links.children
+    if children is None:
+        return None
+    for key in match_related_keys(children, result.weapon.attacks):
+        child_definition = result.weapon.attacks.get(key)
+        child = result.attacks.get(key)
+        if child is not None and child_definition is not None and child_definition.aoe:
+            return child
+    return None
+
+
+def effective_damage_rows(resolved, *, melee: bool = False) -> list[DamageResultRow]:
     _calculator, result = resolved
-    selected = result.attacks[result.selected_attack]
-    damage = selected.effective.damage
-    return [
-        DamageResultRow(
+    primary = result.attacks[result.selected_attack]
+    explosion = None if melee else _related_explosion_attack(result)
+    damage_types = dict.fromkeys((*primary.effective.damage, *primary.effective.forced_procs, *(explosion.effective.damage if explosion is not None else ()), *(explosion.effective.forced_procs if explosion is not None else ())))
+    rows = []
+    for damage_type in damage_types:
+        damage, weight, forced_procs, proc_rate = _status_summary_cells(primary, damage_type)
+        explosion_damage, explosion_weight, explosion_forced_procs, explosion_proc_rate = _status_summary_cells(explosion, damage_type)
+        rows.append(DamageResultRow(
             damage_type=damage_type.title(),
-            damage=f"{value:,.2f}",
-            weight=f"{damage.weight(damage_type):,.2f}" if melee else "",
-            direct_weight="" if melee else f"{damage.weight(damage_type):,.2f}",
-            explosion_weight="" if melee else "0.00",
-            proc_chance=f"{damage.weight(damage_type) * selected.effective.status_chance:.1%}",
-        )
-        for damage_type, value in damage.items()
-    ]
+            damage=damage,
+            weight=weight,
+            forced_procs=forced_procs,
+            proc_rate=proc_rate,
+            explosion_damage=explosion_damage,
+            explosion_weight=explosion_weight,
+            explosion_forced_procs=explosion_forced_procs,
+            explosion_proc_rate=explosion_proc_rate,
+        ))
+    return rows
 
 
 def result_summary(resolved) -> str:
     return Formatter(resolved[1]).summary()
+
+
+def result_summary_table_rows(resolved) -> list[SummaryTableRow]:
+    _title, _headers, rows = Formatter(resolved[1]).summary_table()
+    output: list[SummaryTableRow] = []
+    section_start = False
+    for index, row in enumerate(rows):
+        if row[0].startswith("\0"):
+            section_start = index > 0
+            continue
+        output.append(SummaryTableRow(stat=row[0], base=row[1], modded=row[2], effective=row[3], average=row[4], section_start=section_start))
+        section_start = False
+    return output
 
 
 def result_contributions_summary(resolved) -> str:

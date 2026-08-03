@@ -59,7 +59,7 @@ def test_vectis_riven_incumbent_score_matches_a_clean_result():
             upgrades.append(build_upgrade(RIVEN, result.riven_fields[index]))
         else:
             upgrades.append(database_upgrade(name, kind=SLOT_CONFIGS[index]["kind"], rank=result.slot_ranks[index], stacks=result.slot_stacks[index] or None, condition=True))
-    target = configured_enemy(request.enemy_name, custom_enemy=False, custom_entry=None, level=request.enemy_level, steel_path=request.enemy_steel_path, empowered=False)
+    target = configured_enemy(request.enemy_name, level=request.enemy_level, steel_path=request.enemy_steel_path, empowered=False)
     weapon = configured_weapon("Primary", "Vectis Prime", custom_weapon=False, base_stats={}, upgrades=upgrades, selected_mode=request.attack_mode, evolutions=result.evolutions, runtime_conditions=request.evolution_runtime, target=target)
 
     assert result.total_dps == pytest.approx(weapon.results.main.final.total_weakpoint_dps)

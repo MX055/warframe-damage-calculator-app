@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import copy
-import json
 import threading
 import uuid
 from typing import Any
@@ -77,7 +76,6 @@ from .engine import (
     configured_enemy,
     configured_weapon,
     contribution_lookup_map,
-    contribution_rows,
     contribution_value_for_name,
     stance_combo_rows,
     effective_damage_rows,
@@ -88,11 +86,11 @@ from .engine import (
     library_contribution_bundle,
     main_metrics,
     parse_float,
-    parse_database_entry,
     parse_int,
     progenitor_upgrade,
     ranged_misc_metrics,
     result_summary,
+    result_summary_table_rows,
     resistant_metrics,
     upgrade_field_input_config,
     upgrade_description_rows,
@@ -107,10 +105,10 @@ from .models import (
     MetricRow,
     RuntimeStackField,
     RuntimeToggleField,
+    SummaryTableRow,
 )
 
 NONE = "None"
-CUSTOM = "Custom"
 RIVEN = "Riven"
 
 
@@ -201,27 +199,6 @@ def _empty_riven_editor_field() -> EditorField:
 
 
 
-def _custom_enemy_template() -> str:
-    return json.dumps(
-        {
-            "name": "Custom Enemy",
-            "faction": "Grineer",
-            "base_level": 1,
-            "stats": {"health": 300, "shields": 0, "armor": 500, "overguard": 0},
-            "bodyparts": {
-                "body": {"type": "normal", "multiplier": 1.0},
-                "head": {"type": "weakpoint", "multiplier": 3.0},
-            },
-            "modifiers": {"corrosive": 1.5, "impact": 1.5},
-            "runtime": {"level": 100, "steel_path": False, "empowered": False},
-        },
-        indent=2,
-    )
-
-
-
-
-
 class CalculatorState(rx.State):
     """All browser-facing state is JSON-serializable.
 
@@ -239,10 +216,8 @@ class CalculatorState(rx.State):
     selected_enemy_faction: str = ""
     enemy_faction_options: list[str] = rx.field(default_factory=list)
     selected_enemy: str = NONE
-    enemy_options: list[str] = rx.field(default_factory=lambda: [NONE, CUSTOM])
+    enemy_options: list[str] = rx.field(default_factory=lambda: [NONE])
     enemy_select_open: bool = False
-    custom_enemy_entry: str = ""
-    custom_enemy_placeholder: str = rx.field(default_factory=_custom_enemy_template)
     enemy_level: int = 100
     enemy_steel_path: bool = False
     enemy_empowered: bool = False
@@ -401,6 +376,7 @@ class CalculatorState(rx.State):
     result_metrics: list[MetricRow] = rx.field(default_factory=list)
     damage_result_rows: list[DamageResultRow] = rx.field(default_factory=list)
     contribution_result_rows: list[ContributionRow] = rx.field(default_factory=list)
+    summary_result_rows: list[SummaryTableRow] = rx.field(default_factory=list)
     result_summary: str = ""
     result_contribution_summary: str = ""
     contribution_revision: int = 0
@@ -410,16 +386,12 @@ class CalculatorState(rx.State):
     result_ready: bool = False
 
     @rx.var
-    def custom_enemy(self) -> bool:
-        return self.selected_enemy == CUSTOM
-
-    @rx.var
     def no_enemy(self) -> bool:
         return self.selected_enemy == NONE
 
     @rx.var
     def show_enemy_inline_error(self) -> bool:
-        return bool(self.enemy_error and not (self.selected_enemy == CUSTOM and not self.custom_enemy_entry.strip()))
+        return bool(self.enemy_error)
 
     @rx.var
     def no_weapon(self) -> bool:
@@ -621,7 +593,7 @@ class CalculatorState(rx.State):
         self.selected_enemy_faction = value
         self.enemy_select_open = False
         previous = self.selected_enemy
-        self.enemy_options = [NONE, CUSTOM, *enemies_for_faction(value)]
+        self.enemy_options = [NONE, *enemies_for_faction(value)]
         if self.selected_enemy not in self.enemy_options:
             self.selected_enemy = NONE
         if self.selected_enemy != previous:
@@ -647,12 +619,6 @@ class CalculatorState(rx.State):
     def set_enemy(self, value: str):
         self.enemy_select_open = False
         self.selected_enemy = value if value in self.enemy_options else NONE
-        self._invalidate_optimizer_result()
-        return self._recalculate()
-
-    @rx.event
-    def set_custom_enemy_entry(self, value: str):
-        self.custom_enemy_entry = value
         self._invalidate_optimizer_result()
         return self._recalculate()
 
@@ -1144,7 +1110,6 @@ class CalculatorState(rx.State):
                 progenitor_value=self.progenitor_value,
                 external_fields={field.name: field.value for field in self.external_fields},
                 enemy_name=self.selected_enemy,
-                custom_enemy_entry=self.custom_enemy_entry,
                 enemy_level=self.enemy_level,
                 enemy_steel_path=self.enemy_steel_path,
                 enemy_empowered=self.enemy_empowered,
@@ -1521,13 +1486,13 @@ class CalculatorState(rx.State):
     def _refresh_enemy_options(self):
         factions = list(enemy_faction_options())
         self.enemy_faction_options = factions
-        if self.selected_enemy not in (NONE, CUSTOM):
+        if self.selected_enemy != NONE:
             synced = enemy_faction_for(self.selected_enemy)
             if synced in factions:
                 self.selected_enemy_faction = synced
         if self.selected_enemy_faction not in factions:
             self.selected_enemy_faction = factions[0] if factions else ""
-        self.enemy_options = [NONE, CUSTOM, *enemies_for_faction(self.selected_enemy_faction)]
+        self.enemy_options = [NONE, *enemies_for_faction(self.selected_enemy_faction)]
         if self.selected_enemy not in self.enemy_options:
             self.selected_enemy = NONE
 
@@ -2126,8 +2091,6 @@ class CalculatorState(rx.State):
     def _target_enemy(self):
         return configured_enemy(
             self.selected_enemy,
-            custom_enemy=self.custom_enemy,
-            custom_entry=self.custom_enemy_entry if self.custom_enemy else None,
             level=self.enemy_level,
             steel_path=self.enemy_steel_path,
             empowered=self.enemy_empowered,
@@ -2317,6 +2280,7 @@ class CalculatorState(rx.State):
         self.result_metrics = []
         self.damage_result_rows = []
         self.contribution_result_rows = []
+        self.summary_result_rows = []
         self.result_summary = ""
         self.result_contribution_summary = ""
         self.contribution_revision += 1
@@ -2363,7 +2327,7 @@ class CalculatorState(rx.State):
             return
         target = self._target_for_calculation()
         resolved, upgrades, _slot_upgrades = self._build_resolved_weapon(target)
-        contribution_lookup, text = library_contribution_bundle(resolved, target_metric="total_dps")
+        contribution_lookup, text, rows = library_contribution_bundle(resolved, target_metric="total_dps")
         contribution_map = contribution_lookup_map(contribution_lookup)
         contributions = []
         for index, config in enumerate(SLOT_CONFIGS):
@@ -2371,7 +2335,7 @@ class CalculatorState(rx.State):
             contribution_name = config["label"] if selected == NONE else selected
             contributions.append(format_contribution(contribution_value_for_name(contribution_map, contribution_name)))
         self.slot_contributions = contributions
-        self.contribution_result_rows = contribution_rows(contribution_lookup)
+        self.contribution_result_rows = rows
         self.result_contribution_summary = text
         self.contributions_pending = False
 
@@ -2399,7 +2363,7 @@ class CalculatorState(rx.State):
 
         loop = asyncio.get_running_loop()
         try:
-            contribution_lookup, text = await loop.run_in_executor(None, compute)
+            contribution_lookup, text, rows = await loop.run_in_executor(None, compute)
         except Exception as exc:
             async with self:
                 if self.contribution_revision == revision:
@@ -2413,7 +2377,6 @@ class CalculatorState(rx.State):
             selected = selected_upgrades[index]
             contribution_name = config["label"] if selected == NONE else selected
             contributions.append(format_contribution(contribution_value_for_name(contribution_map, contribution_name)))
-        rows = contribution_rows(contribution_lookup)
         async with self:
             if self.contribution_revision == revision:
                 self.slot_contributions = contributions
@@ -2468,6 +2431,7 @@ class CalculatorState(rx.State):
             self.ranged_result_metrics = self.result_metrics
             self.damage_result_rows = effective_damage_rows(weapon, melee=self.selected_weapon_type == "Melee")
             self.result_summary = result_summary(weapon)
+            self.summary_result_rows = result_summary_table_rows(weapon)
             self.contribution_revision += 1
             self.contributions_pending = True
             self.result_contribution_summary = "Computing upgrade contributions…"

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -11,7 +10,6 @@ from .constants import DEFAULT_OPTIMIZE_SEARCH, INITIAL_COMBO_RUNTIME, NO_EFFECT
 from .engine import apply_loadout_runtime, build_calculation_state
 
 NONE = "None"
-CUSTOM = "Custom"
 RIVEN = "Riven"
 
 ProgressCallback = Callable[[OptimizationProgress], None]
@@ -47,7 +45,6 @@ class OptimizeRequest:
     slots: list[SlotSpec]
     find_optimal_riven: bool
     enemy_name: str = NONE
-    custom_enemy_entry: str = ""
     enemy_level: int = 1
     enemy_steel_path: bool = False
     enemy_empowered: bool = False
@@ -104,9 +101,6 @@ def _calculation_state(request: OptimizeRequest):
 
 
 def _load_enemy(request: OptimizeRequest):
-    if request.custom_enemy_entry.strip():
-        from warframe_damage_calculator import Enemy
-        return Enemy.from_record(json.loads(request.custom_enemy_entry)).set(level=request.enemy_level, steel_path=request.enemy_steel_path, empowered=request.enemy_empowered)
     return arsenal.enemy.get(request.enemy_name).set(level=request.enemy_level, steel_path=request.enemy_steel_path, empowered=request.enemy_empowered)
 
 

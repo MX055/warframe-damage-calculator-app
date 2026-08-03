@@ -20,7 +20,7 @@ from .constants import (
     STANCE_SLOT_INDEX,
     WEAPON_TYPE_OPTIONS,
 )
-from .models import ClearBuffRow, ContributionRow, DamageResultRow, DisplayRow, EditorField, MetricRow, RuntimeStackField, RuntimeToggleField
+from .models import ClearBuffRow, ContributionRow, DamageResultRow, DisplayRow, EditorField, MetricRow, RuntimeStackField, RuntimeToggleField, SummaryTableRow
 from .state import NONE, RIVEN, CalculatorState
 
 
@@ -256,7 +256,7 @@ def read_me() -> rx.Component:
                     ),
                     rx.heading("Instructions", size="4"),
                     rx.text(
-                        "Select a weapon and enemy target, configure custom entries when needed, fill the upgrade slots, add external buffs, then inspect the live results."
+                        "Select a weapon and enemy target, fill the upgrade slots, add external buffs, then inspect the live results."
                     ),
                     rx.heading("Notes", size="4"),
                     rx.text(
@@ -404,40 +404,6 @@ def ability_strength_control() -> rx.Component:
 
 def supported_ability_strength_control() -> rx.Component:
     return rx.cond(CalculatorState.ability_strength_available, ability_strength_control())
-
-
-def database_entry_input(
-    label: str,
-    value,
-    on_change,
-    *,
-    placeholder="",
-    help_text: str,
-    min_height: str,
-) -> rx.Component:
-    return rx.vstack(
-        rx.hstack(
-            rx.text(label, class_name="field-label entry-label"),
-            rx.spacer(),
-            rx.text(help_text, class_name="entry-help"),
-            width="100%",
-            align="center",
-        ),
-        rx.text_area(
-            value=value,
-            placeholder=placeholder,
-            on_change=on_change,
-            debounce_timeout=400,
-            width="100%",
-            min_height=min_height,
-            resize="vertical",
-            spell_check=False,
-            class_name="database-entry-input",
-        ),
-        width="100%",
-        gap="2",
-        align="stretch",
-    )
 
 
 def custom_damage_controls() -> rx.Component:
@@ -683,7 +649,7 @@ def enemy_toggle_control(label: str, checked, on_change) -> rx.Component:
 
 def enemy_section() -> rx.Component:
     return rx.vstack(
-        section_title("Enemy", "Choose a faction and target, or define a custom enemy."),
+        section_title("Enemy", "Choose a faction and target."),
         panel(
             rx.vstack(
                 rx.grid(
@@ -707,17 +673,6 @@ def enemy_section() -> rx.Component:
                     class_name="form-grid form-grid-2",
                 ),
                 rx.cond(
-                    CalculatorState.custom_enemy,
-                    database_entry_input(
-                        "Custom Enemy Entry",
-                        CalculatorState.custom_enemy_entry,
-                        CalculatorState.set_custom_enemy_entry,
-                        placeholder=CalculatorState.custom_enemy_placeholder,
-                        help_text="JSON",
-                        min_height="320px",
-                    ),
-                ),
-                rx.cond(
                     ~CalculatorState.no_enemy,
                     select_control(
                         "Body Part",
@@ -727,7 +682,7 @@ def enemy_section() -> rx.Component:
                     ),
                 ),
                 rx.cond(
-                    (~CalculatorState.no_enemy) & (~CalculatorState.custom_enemy),
+                    ~CalculatorState.no_enemy,
                     rx.grid(
                         number_control("Level", CalculatorState.enemy_level, CalculatorState.set_enemy_level, minimum=1, maximum=9999, step="1"),
                         enemy_toggle_control("Steel Path", CalculatorState.enemy_steel_path, lambda value: CalculatorState.set_enemy_toggle("enemy_steel_path", value)),
@@ -1596,77 +1551,123 @@ def metric_grid(*metric_groups) -> rx.Component:
     )
 
 
-def melee_damage_row(row: rx.Var[DamageResultRow]) -> rx.Component:
+def damage_row(row: rx.Var[DamageResultRow]) -> rx.Component:
     return rx.table.row(
         rx.table.row_header_cell(row.damage_type),
         rx.table.cell(row.damage),
         rx.table.cell(row.weight),
-        rx.table.cell(row.proc_chance),
-    )
-
-
-def ranged_damage_row(row: rx.Var[DamageResultRow]) -> rx.Component:
-    return rx.table.row(
-        rx.table.row_header_cell(row.damage_type),
-        rx.table.cell(row.damage),
-        rx.table.cell(row.direct_weight),
+        rx.table.cell(row.forced_procs),
+        rx.table.cell(row.proc_rate),
+        rx.table.cell(row.explosion_damage),
         rx.table.cell(row.explosion_weight),
-        rx.table.cell(row.proc_chance),
+        rx.table.cell(row.explosion_forced_procs),
+        rx.table.cell(row.explosion_proc_rate),
     )
 
 
 def damage_table() -> rx.Component:
-    melee_table = rx.table.root(
-        rx.table.header(
-            rx.table.row(
-                rx.table.column_header_cell("Damage Type"),
-                rx.table.column_header_cell("Damage"),
-                rx.table.column_header_cell("Weight"),
-                rx.table.column_header_cell("Proc Chance"),
-            )
-        ),
-        rx.table.body(rx.foreach(CalculatorState.damage_result_rows, melee_damage_row)),
-        width="100%",
-        variant="surface",
-    )
-    ranged_table = rx.table.root(
-        rx.table.header(
-            rx.table.row(
-                rx.table.column_header_cell("Damage Type"),
-                rx.table.column_header_cell("Damage"),
-                rx.table.column_header_cell("Direct Hit Weight"),
-                rx.table.column_header_cell("Related Attack Weight"),
-                rx.table.column_header_cell("Proc Chance"),
-            )
-        ),
-        rx.table.body(rx.foreach(CalculatorState.damage_result_rows, ranged_damage_row)),
-        width="100%",
-        variant="surface",
-    )
     return rx.box(
-        rx.cond(CalculatorState.melee_weapon, melee_table, ranged_table),
+        rx.table.root(
+            rx.table.header(
+                rx.table.row(
+                    rx.table.column_header_cell("Damage Type", row_span=2),
+                    rx.table.column_header_cell("Normal Attack", col_span=4),
+                    rx.table.column_header_cell("Explosion", col_span=4),
+                ),
+                rx.table.row(
+                    rx.table.column_header_cell("Damage"),
+                    rx.table.column_header_cell("Weight"),
+                    rx.table.column_header_cell("Forced Procs"),
+                    rx.table.column_header_cell("Proc Rate"),
+                    rx.table.column_header_cell("Damage"),
+                    rx.table.column_header_cell("Weight"),
+                    rx.table.column_header_cell("Forced Procs"),
+                    rx.table.column_header_cell("Proc Rate"),
+                ),
+            ),
+            rx.table.body(rx.foreach(CalculatorState.damage_result_rows, damage_row)),
+            width="100%",
+            variant="surface",
+        ),
         class_name="damage-table-container",
         width="100%",
         overflow_x="auto",
     )
 
 
-def contribution_row(row: rx.Var[ContributionRow]) -> rx.Component:
-    return rx.hstack(
-        rx.text(row.name),
-        rx.spacer(),
-        rx.text(row.value, class_name="preview-value"),
+def contribution_table_row(row: rx.Var[ContributionRow]) -> rx.Component:
+    return rx.table.row(
+        rx.table.cell(row.rank),
+        rx.table.cell(row.kind),
+        rx.table.row_header_cell(row.name),
+        rx.table.cell(row.share),
+        rx.table.cell(row.removal),
+        rx.table.cell(row.impact, class_name="contribution-impact"),
+    )
+
+
+def contribution_table() -> rx.Component:
+    return rx.box(
+        rx.table.root(
+            rx.table.header(
+                rx.table.row(
+                    rx.table.column_header_cell("Rank"),
+                    rx.table.column_header_cell("Type"),
+                    rx.table.column_header_cell("Component"),
+                    rx.table.column_header_cell("Relative Contribution"),
+                    rx.table.column_header_cell("Removal Difference"),
+                    rx.table.column_header_cell("Impact"),
+                )
+            ),
+            rx.table.body(rx.foreach(CalculatorState.contribution_result_rows, contribution_table_row)),
+            width="100%",
+            variant="surface",
+        ),
+        class_name="damage-table-container",
         width="100%",
-        align="center",
-        class_name="contribution-row",
+        overflow_x="auto",
+    )
+
+
+def summary_table_row(row: rx.Var[SummaryTableRow]) -> rx.Component:
+    return rx.table.row(
+        rx.table.row_header_cell(row.stat),
+        rx.table.cell(row.base),
+        rx.table.cell(row.modded),
+        rx.table.cell(row.effective),
+        rx.table.cell(row.average),
+        class_name=rx.cond(row.section_start, "summary-section-start", ""),
+    )
+
+
+def summary_table() -> rx.Component:
+    return rx.box(
+        rx.table.root(
+            rx.table.header(
+                rx.table.row(
+                    rx.table.column_header_cell("Stat"),
+                    rx.table.column_header_cell("Base"),
+                    rx.table.column_header_cell("Modded"),
+                    rx.table.column_header_cell("Effective"),
+                    rx.table.column_header_cell("Average"),
+                )
+            ),
+            rx.table.body(rx.foreach(CalculatorState.summary_result_rows, summary_table_row)),
+            width="100%",
+            variant="surface",
+        ),
+        class_name="damage-table-container",
+        width="100%",
+        overflow_x="auto",
     )
 
 
 def result_tabs() -> rx.Component:
     return rx.tabs.root(
         rx.tabs.list(
-            rx.tabs.trigger("Damage Distribution", value="damage"),
-            rx.tabs.trigger("Contributions", value="contributions"),
+            rx.tabs.trigger("Status Summary", value="damage"),
+            rx.tabs.trigger("Build Summary", value="contributions"),
+            rx.tabs.trigger("Weapon Summary", value="summary-table"),
             rx.tabs.trigger("Text Summary", value="summary"),
         ),
         rx.tabs.content(
@@ -1679,17 +1680,24 @@ def result_tabs() -> rx.Component:
                 CalculatorState.contributions_pending,
                 rx.text(CalculatorState.result_contribution_summary, class_name="empty-text"),
                 rx.cond(
-                    CalculatorState.result_contribution_summary != "",
-                    rx.el.pre(
-                        CalculatorState.result_contribution_summary,
-                        class_name="plain-text-summary",
-                    ),
+                    CalculatorState.contribution_result_rows.length() > 0,
+                    contribution_table(),
                     rx.text("No upgrade contributions.", class_name="empty-text"),
                 ),
             ),
             value="contributions",
             padding_top="1rem",
-        ),        rx.tabs.content(
+        ),
+        rx.tabs.content(
+            rx.cond(
+                CalculatorState.summary_result_rows.length() > 0,
+                summary_table(),
+                rx.text("No summary available.", class_name="empty-text"),
+            ),
+            value="summary-table",
+            padding_top="1rem",
+        ),
+        rx.tabs.content(
             rx.vstack(
                 rx.text("Weapon Summary", class_name="card-title"),
                 rx.el.pre(
