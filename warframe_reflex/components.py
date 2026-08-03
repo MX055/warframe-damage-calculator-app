@@ -1667,8 +1667,8 @@ def result_tabs() -> rx.Component:
         rx.tabs.list(
             rx.tabs.trigger("Status Summary", value="damage"),
             rx.tabs.trigger("Build Summary", value="contributions"),
-            rx.tabs.trigger("Weapon Summary", value="summary-table"),
-            rx.tabs.trigger("Text Summary", value="summary"),
+            rx.tabs.trigger("Stat Summary", value="summary-table"),
+            rx.tabs.trigger("Text Summaries", value="summary"),
         ),
         rx.tabs.content(
             damage_table(),
@@ -1699,17 +1699,17 @@ def result_tabs() -> rx.Component:
         ),
         rx.tabs.content(
             rx.vstack(
-                rx.text("Status", class_name="card-title"),
+                rx.text("Status Summary", class_name="card-title"),
                 rx.el.pre(
                     CalculatorState.result_status_summary,
                     class_name="plain-text-summary",
                 ),
-                rx.text("Upgrade Contributions", class_name="card-title"),
+                rx.text("Build Summary", class_name="card-title"),
                 rx.el.pre(
                     CalculatorState.result_contribution_summary,
                     class_name="plain-text-summary",
                 ),
-                rx.text("Weapon Summary", class_name="card-title"),
+                rx.text("Stat Summary", class_name="card-title"),
                 rx.el.pre(
                     CalculatorState.result_summary,
                     class_name="plain-text-summary",
