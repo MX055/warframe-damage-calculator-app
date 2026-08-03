@@ -92,8 +92,8 @@ from .engine import (
     parse_int,
     progenitor_upgrade,
     ranged_misc_metrics,
-    result_summary,
     result_contributions_summary,
+    result_summary,
     resistant_metrics,
     upgrade_field_input_config,
     upgrade_description_rows,
@@ -1238,12 +1238,17 @@ class CalculatorState(rx.State):
                 try:
                     async with self:
                         if self.optimize_revision == revision:
-                            self._refresh_upgrade_options()
-                            self._refresh_all_riven_field_limits()
-                            self._refresh_slot_field_options()
-                            self._recalculate()
-                            self.optimize_phase = "Complete"
-                            self.optimize_elapsed = _format_elapsed(result.elapsed_seconds)
+                            try:
+                                self._ensure_selected_upgrades_in_options()
+                                self._refresh_all_riven_field_limits()
+                                self._refresh_slot_field_options()
+                                self._recalculate()
+                                self.optimize_phase = "Complete"
+                                self.optimize_elapsed = _format_elapsed(result.elapsed_seconds)
+                            except Exception as exc:
+                                self.optimize_phase = "Complete"
+                                self.optimize_status = f"Build applied with errors: {type(exc).__name__}: {exc}"
+                                self.optimize_elapsed = _format_elapsed(result.elapsed_seconds)
                 finally:
                     async with self:
                         self.optimize_running = False
@@ -1637,6 +1642,25 @@ class CalculatorState(rx.State):
         if previous_combo in self.stance_combo_options:
             self.selected_stance_combo = previous_combo
 
+    def _ensure_selected_upgrades_in_options(self):
+        """Keep current selections visible in dropdowns without a full option rebuild."""
+        for index, config in enumerate(SLOT_CONFIGS):
+            name = self.slot_selected_upgrades[index]
+            if name == NONE:
+                continue
+            if config["kind"] == "arcane":
+                if name not in self.arcane_options:
+                    self.arcane_options = [*self.arcane_options, name]
+            elif config.get("stance"):
+                if name not in self.stance_options:
+                    self.stance_options = [*self.stance_options, name]
+            elif config["exilus"]:
+                if name not in self.exilus_options:
+                    self.exilus_options = [*self.exilus_options, name]
+            elif name not in self.mod_options:
+                self.mod_options = [*self.mod_options, name]
+        self._refresh_slot_upgrade_options()
+        self._refresh_slot_condition_metadata()
 
     def _refresh_upgrade_options(self):
         weapon_name = None if self.selected_weapon == NONE else self.selected_weapon
