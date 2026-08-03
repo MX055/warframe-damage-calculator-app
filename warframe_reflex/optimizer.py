@@ -111,10 +111,11 @@ def _load_enemy(request: OptimizeRequest):
 
 def _riven_ranked(spec: SlotSpec):
     slot = "stance_mod" if spec.stance else "exilus_mod" if spec.exilus else "regular_arcane" if spec.kind == "arcane" else "regular_mod"
+    library_stats = {alias: name for name, alias in RIVEN_STAT_ALIASES.items()}
     stats: dict[str, object] = {}
     for stat, raw in spec.riven_fields.items():
         if isinstance(raw, (int, float, bool, str)) and raw != 0:
-            stats[stat] = raw
+            stats[library_stats.get(stat, stat)] = raw
     cls = Arcane if spec.kind == "arcane" else Mod
     return cls(name=RIVEN, slot=slot, max_rank=max(spec.rank, 0), stats=UpgradeStats(**stats), runtime={"rank": max(spec.rank, 0)})
 
@@ -163,12 +164,33 @@ def _is_riven(mod: Mod) -> bool:
     return name == "riven" or name.startswith("riven (")
 
 
+def _effect_numeric(value: object) -> float | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    nested = getattr(value, "value", None)
+    if isinstance(nested, bool):
+        return None
+    if isinstance(nested, (int, float)):
+        return float(nested)
+    return None
+
+
 def _riven_fields(mod: Mod) -> dict[str, float]:
     fields: dict[str, float] = {}
     for stat, effects in mod.stats.items():
-        value = sum(float(effect.value) for effect in effects if isinstance(effect.value, (int, float)) and not isinstance(effect.value, bool))
-        if value: fields[RIVEN_STAT_ALIASES.get(stat, stat)] = value
-    return fields
+        total = 0.0
+        found = False
+        for effect in effects:
+            numeric = _effect_numeric(getattr(effect, "value", effect))
+            if numeric is None:
+                continue
+            total += numeric
+            found = True
+        if found and total != 0:
+            fields[RIVEN_STAT_ALIASES.get(stat, stat)] = total
+    return dict(sorted(fields.items(), key=lambda item: (item[1] < 0, str.casefold(item[0]))))
 
 
 def _runtime_stacks(upgrade: Mod | Arcane) -> int:

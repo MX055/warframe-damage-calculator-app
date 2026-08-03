@@ -1849,11 +1849,14 @@ class CalculatorState(rx.State):
         return raw_weapon_metadata(self.selected_weapon_type, self.selected_weapon)
 
     def _riven_base_stats(self) -> dict[str, float]:
-        category = {
-            "Shotgun": "shotgun",
-            "Pistol": "pistol",
-            "Melee": "melee",
-        }.get(self.selected_weapon_category, "rifle")
+        if self.selected_weapon_type == "Melee":
+            category = "melee"
+        elif self.selected_weapon_category == "Shotgun":
+            category = "shotgun"
+        elif self.selected_weapon_type == "Secondary" or self.selected_weapon_category == "Pistol":
+            category = "pistol"
+        else:
+            category = "rifle"
         raw_stats = raw_riven_stats_database().get(category, {}) or {}
         stats = {
             RIVEN_STAT_ALIASES.get(name, name): float(value)

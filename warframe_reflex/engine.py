@@ -19,6 +19,7 @@ FIELD_LABEL_OVERRIDES = {
     "base_damage": "Damage",
     "crit_chance": "Critical Chance",
     "crit_damage": "Critical Damage",
+    "slide_crit_chance": "Critical Chance on Slide Attack",
 }
 
 
