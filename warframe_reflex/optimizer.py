@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import json
 import threading
-from types import MappingProxyType
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from warframe_damage_calculator import Calculator, Loadout, Mod, Arcane, Progenitor, Optimizer, OptimizationProgress, UpgradeStats, Effect, arsenal, default_metric
+from warframe_damage_calculator import Arcane, Calculator, Effect, Loadout, Mod, OptimizationProgress, Optimizer, Progenitor, UpgradeStats, arsenal, default_metric
 
-from .constants import DEFAULT_OPTIMIZE_SEARCH, NO_EFFECT, OPTIMIZE_SEARCH_EVALUATION_BUDGETS, RIVEN_ROLL_CONFIGS, RIVEN_STAT_ALIASES, SLOT_CONFIGS, SLOT_POLICY_DISCARD, SLOT_POLICY_KEEP
+from .constants import DEFAULT_OPTIMIZE_SEARCH, INITIAL_COMBO_RUNTIME, NO_EFFECT, OPTIMIZE_SEARCH_EVALUATION_BUDGETS, RIVEN_ROLL_CONFIGS, RIVEN_STAT_ALIASES, SLOT_CONFIGS, SLOT_POLICY_DISCARD, SLOT_POLICY_KEEP
+from .engine import apply_loadout_runtime, build_calculation_state
 
 NONE = "None"
 CUSTOM = "Custom"
@@ -28,7 +28,6 @@ class SlotSpec:
     stacks: int
     condition: bool
     stance: bool = False
-    custom_entry: str = ""
     riven_roll: str = "2 Positive + 1 Negative"
     riven_fields: dict[str, float] = field(default_factory=dict)
 
@@ -38,8 +37,6 @@ class OptimizeRequest:
     weapon_type: str
     weapon_category: str
     weapon_name: str
-    custom_weapon: bool
-    custom_weapon_entry: str
     attack_mode: str
     evolutions: dict[int, int]
     combo_count: int | str
@@ -80,7 +77,6 @@ class OptimizeResult:
     slot_policies: list[str]
     riven_rolls: list[str]
     riven_fields: list[dict[str, float]]
-    custom_entries: list[str]
     total_dps: float
     evaluations: int
     message: str
@@ -98,14 +94,12 @@ def _repository(weapon_type: str):
 
 
 def _load_weapon(request: OptimizeRequest):
-    if request.custom_weapon:
-        raise ValueError("The new optimizer currently requires a database weapon; custom weapon optimization is not yet supported.")
-    weapon = _repository(request.weapon_type).get(request.weapon_name)
-    state = {"combo": int(request.combo_count) if str(request.combo_count).isdigit() else weapon.calculation_defaults.get("combo", 12), "stance_combo": request.stance_combo}
-    if request.ability_strength is not None: state["ability_strength"] = request.ability_strength
-    state.update(request.evolution_runtime)
-    weapon.calculation_defaults = MappingProxyType(dict(weapon.calculation_defaults) | state)
-    return weapon
+    return _repository(request.weapon_type).get(request.weapon_name)
+
+
+def _calculation_state(request: OptimizeRequest):
+    combo = None if request.combo_count == INITIAL_COMBO_RUNTIME else int(request.combo_count) if str(request.combo_count).isdigit() else None
+    return build_calculation_state(combo=combo, stance_combo=request.stance_combo, ability_strength=request.ability_strength)
 
 
 def _load_enemy(request: OptimizeRequest):
@@ -115,32 +109,23 @@ def _load_enemy(request: OptimizeRequest):
     return arsenal.enemy.get(request.enemy_name).set(level=request.enemy_level, steel_path=request.enemy_steel_path, empowered=request.enemy_empowered)
 
 
-def _custom_ranked(spec: SlotSpec):
-    data = json.loads(spec.custom_entry) if spec.custom_entry.strip() else {}
-    name = str(data.get("name") or (RIVEN if spec.selected == RIVEN else CUSTOM))
+def _riven_ranked(spec: SlotSpec):
     slot = "stance_mod" if spec.stance else "exilus_mod" if spec.exilus else "regular_arcane" if spec.kind == "arcane" else "regular_mod"
-    stats_source = spec.riven_fields if spec.selected == RIVEN else data.get("stats", {})
     stats: dict[str, object] = {}
-    for stat, raw in stats_source.items():
-        if isinstance(raw, list):
-            effects = []
-            for item in raw:
-                if isinstance(item, dict): effects.append(Effect.from_record(item))
-                else: effects.append(Effect(item))
-            if effects: stats[stat] = tuple(effects)
-        elif isinstance(raw, dict) and "value" in raw: stats[stat] = Effect.from_record(raw)
-        elif isinstance(raw, (int, float, bool, str)) and raw != 0: stats[stat] = raw
+    for stat, raw in spec.riven_fields.items():
+        if isinstance(raw, (int, float, bool, str)) and raw != 0:
+            stats[stat] = raw
     cls = Arcane if spec.kind == "arcane" else Mod
-    return cls(name=name, slot=slot, max_rank=max(spec.rank, 0), stats=UpgradeStats(**stats), runtime={"rank": max(spec.rank, 0)})
+    return cls(name=RIVEN, slot=slot, max_rank=max(spec.rank, 0), stats=UpgradeStats(**stats), runtime={"rank": max(spec.rank, 0)})
 
 
 def _load_slot(spec: SlotSpec):
     if spec.selected == NONE: return None
-    if spec.selected in {CUSTOM, RIVEN}: return _custom_ranked(spec)
+    if spec.selected == RIVEN: return _riven_ranked(spec)
     item = (arsenal.arcane if spec.kind == "arcane" else arsenal.mod).get(spec.selected)
     values = {"rank": min(max(spec.rank, 0), item.max_rank)}
-    for field in item.stats.manual_fields:
-        values[field] = spec.stacks if spec.stacks > 0 else spec.condition
+    for field_name in item.stats.manual_fields:
+        values[field_name] = spec.stacks if spec.stacks > 0 else spec.condition
     item.set(**values)
     return item
 
@@ -187,13 +172,13 @@ def _riven_fields(mod: Mod) -> dict[str, float]:
 
 
 def _runtime_stacks(upgrade: Mod | Arcane) -> int:
-    values = [getattr(upgrade.runtime, field) for field in upgrade.stats.manual_fields]
+    values = [getattr(upgrade.runtime, field_name) for field_name in upgrade.stats.manual_fields]
     numeric = [int(value) for value in values if isinstance(value, (int, float)) and not isinstance(value, bool)]
     return max(numeric, default=0)
 
 
 def _runtime_condition(upgrade: Mod | Arcane) -> bool:
-    return any(getattr(upgrade.runtime, field) is True for field in upgrade.stats.manual_fields)
+    return any(getattr(upgrade.runtime, field_name) is True for field_name in upgrade.stats.manual_fields)
 
 
 def _riven_roll(mod: Mod) -> str:
@@ -212,12 +197,13 @@ def optimize_build(request: OptimizeRequest, progress: ProgressCallback | None =
     perks = [weapon.perk_choices[tier][choice] for tier, choice in request.evolutions.items() if tier in weapon.perk_choices and choice in weapon.perk_choices[tier]]
     progenitor = None if request.progenitor_element in {NO_EFFECT, NONE, ""} else Progenitor(request.progenitor_element, request.progenitor_value)
     loadout = Loadout(mods=mods, arcanes=arcanes, evolutions=perks, progenitor=progenitor)
+    apply_loadout_runtime(loadout, request.evolution_runtime)
     calculator = Calculator(weapon, enemy, loadout)
     budget = OPTIMIZE_SEARCH_EVALUATION_BUDGETS.get(request.search_quality, OPTIMIZE_SEARCH_EVALUATION_BUDGETS[DEFAULT_OPTIMIZE_SEARCH])
     upgrade_blacklist = set(request.excluded_upgrades) if request.excluded_upgrades else None
     riven_blacklist = set(request.excluded_riven_stats) if request.excluded_riven_stats else None
     attack = (request.attack_mode or "").strip().lower().replace(" ", "_") or None
-    optimization = Optimizer(calculator).resolve(_metric_for(request), attack=attack, body_part=_body_part(request), evaluations=budget, riven=request.find_optimal_riven, evolutions=request.find_optimal_evolutions, upgrade_blacklist=upgrade_blacklist, riven_stat_blacklist=riven_blacklist, progress=progress)
+    optimization = Optimizer(calculator).resolve(_metric_for(request), attack=attack, body_part=_body_part(request), state=_calculation_state(request), evaluations=budget, riven=request.find_optimal_riven, evolutions=request.find_optimal_evolutions, upgrade_blacklist=upgrade_blacklist, riven_stat_blacklist=riven_blacklist, progress=progress)
 
     names = [NONE for _ in SLOT_CONFIGS]
     ranks = [0 for _ in SLOT_CONFIGS]
@@ -226,7 +212,6 @@ def optimize_build(request: OptimizeRequest, progress: ProgressCallback | None =
     policies = [SLOT_POLICY_DISCARD for _ in SLOT_CONFIGS]
     rolls = ["2 Positive + 1 Negative" for _ in SLOT_CONFIGS]
     riven_fields = [{} for _ in SLOT_CONFIGS]
-    customs = ["" for _ in SLOT_CONFIGS]
     used: set[int] = set()
 
     def place(item, preferred=None):
@@ -258,4 +243,4 @@ def optimize_build(request: OptimizeRequest, progress: ProgressCallback | None =
 
     perk_selection = _perk_map(weapon, optimization.loadout.evolutions)
     progenitor_element = optimization.loadout.progenitor.element.title() if optimization.loadout.progenitor else NO_EFFECT
-    return OptimizeResult(names, ranks, stacks, conditions, policies, rolls, riven_fields, customs, optimization.score, optimization.evaluations, f"Optimization completed in {optimization.elapsed:.1f}s.", perk_selection, request.find_optimal_evolutions, progenitor_element, request.find_optimal_progenitor, request.search_quality, "budget exhausted" if optimization.summary and optimization.summary.get("budget_exhausted") else "converged", optimization.elapsed)
+    return OptimizeResult(names, ranks, stacks, conditions, policies, rolls, riven_fields, optimization.score, optimization.evaluations, f"Optimization completed in {optimization.elapsed:.1f}s.", perk_selection, request.find_optimal_evolutions, progenitor_element, request.find_optimal_progenitor, request.search_quality, "budget exhausted" if optimization.summary and optimization.summary.get("budget_exhausted") else "converged", optimization.elapsed)

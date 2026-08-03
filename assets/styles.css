@@ -558,6 +558,13 @@ textarea.database-entry-input::placeholder {
 
 .slot-stat-preview .preview-label {
   overflow-wrap: normal;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.slot-stat-preview .preview-description {
+  color: var(--text-muted);
+  width: 100%;
 }
 
 .slot-editor-toggle-input:focus-visible + .slot-editor-summary {

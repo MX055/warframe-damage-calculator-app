@@ -21,7 +21,7 @@ from .constants import (
     WEAPON_TYPE_OPTIONS,
 )
 from .models import ClearBuffRow, ContributionRow, DamageResultRow, DisplayRow, EditorField, MetricRow, RuntimeStackField, RuntimeToggleField
-from .state import CUSTOM, NONE, RIVEN, CalculatorState
+from .state import NONE, RIVEN, CalculatorState
 
 
 def panel(*children, class_name: str = "panel", **props) -> rx.Component:
@@ -522,22 +522,6 @@ def custom_damage_controls() -> rx.Component:
     return rx.cond(CalculatorState.ranged_weapon, ranged_tabs, melee_panel)
 
 
-def custom_base_stats() -> rx.Component:
-    return rx.vstack(
-        database_entry_input(
-            "Custom Weapon Entry",
-            CalculatorState.custom_weapon_entry,
-            CalculatorState.set_custom_weapon_entry,
-            placeholder=CalculatorState.custom_weapon_placeholder,
-            help_text="JSON",
-            min_height="320px",
-        ),
-        supported_progenitor_controls(),
-        width="100%",
-        gap="4",
-    )
-
-
 def incarnon_toggle_control(field: rx.Var[RuntimeToggleField]) -> rx.Component:
     return labeled_control(
         field.label,
@@ -578,7 +562,7 @@ def incarnon_runtime_controls() -> rx.Component:
 
 def weapon_section() -> rx.Component:
     return rx.vstack(
-        section_title("Weapon", "Choose a database weapon or define a custom one."),
+        section_title("Weapon", "Choose a database weapon and configure its attack options."),
         panel(
             rx.vstack(
                 rx.grid(
@@ -670,11 +654,7 @@ def weapon_section() -> rx.Component:
                     ),
                 ),
                 incarnon_runtime_controls(),
-                rx.cond(
-                    CalculatorState.custom_weapon,
-                    custom_base_stats(),
-                    supported_progenitor_controls(),
-                ),
+                supported_progenitor_controls(),
                 supported_ability_strength_control(),
                 width="100%",
                 gap="5",
@@ -785,6 +765,18 @@ def display_stat_row(row: rx.Var[DisplayRow]) -> rx.Component:
     )
 
 
+def slot_description_row(row: rx.Var[DisplayRow]) -> rx.Component:
+    return rx.cond(
+        row.value != "",
+        display_stat_row(row),
+        rx.box(
+            rx.text(row.label, class_name="preview-label preview-description"),
+            width="100%",
+            class_name="preview-stat-row",
+        ),
+    )
+
+
 def stat_preview(rows) -> rx.Component:
     return rx.cond(
         rows.length() > 0,
@@ -801,8 +793,8 @@ def slot_stat_preview(rows) -> rx.Component:
     return rx.vstack(
         rx.cond(
             rows.length() > 0,
-            rx.foreach(rows, display_stat_row),
-            rx.text("No stats.", class_name="empty-text preview-stat-row"),
+            rx.foreach(rows, slot_description_row),
+            rx.text("No description.", class_name="empty-text preview-stat-row"),
         ),
         width="100%",
         class_name="slot-stat-preview",
@@ -919,21 +911,6 @@ def database_slot_body(index: int) -> rx.Component:
     )
 
 
-def custom_slot_body(index: int) -> rx.Component:
-    return rx.vstack(
-        database_entry_input(
-            "Custom Upgrade Entry",
-            CalculatorState.custom_upgrade_entries[index],
-            lambda value: CalculatorState.set_custom_upgrade_entry(index, value),
-            placeholder=CalculatorState.custom_upgrade_placeholders[index],
-            help_text="JSON",
-            min_height="220px",
-        ),
-        width="100%",
-        gap="3",
-    )
-
-
 def riven_editor_row(field: rx.Var[EditorField], position, index: int) -> rx.Component:
     return rx.vstack(
         rx.text(CalculatorState.slot_riven_row_labels[index][position], class_name="compact-label"),
@@ -1008,13 +985,9 @@ def upgrade_slot(index: int) -> rx.Component:
                         CalculatorState.slot_selected_upgrades[index] == NONE,
                         rx.text("Select an upgrade to edit its settings.", class_name="empty-text"),
                         rx.cond(
-                            CalculatorState.slot_selected_upgrades[index] == CUSTOM,
-                            custom_slot_body(index),
-                            rx.cond(
-                                CalculatorState.slot_selected_upgrades[index] == RIVEN,
-                                riven_slot_body(index),
-                                database_slot_body(index),
-                            ),
+                            CalculatorState.slot_selected_upgrades[index] == RIVEN,
+                            riven_slot_body(index),
+                            database_slot_body(index),
                         ),
                     ),
                     width="100%",

@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Mapping
 from typing import Iterable
 
-from warframe_damage_calculator import Arcane, Calculator, Dist, Effect, Enemy, Formatter, Loadout, Mod, Progenitor, Upgrade, UpgradeStats
+from warframe_damage_calculator import Arcane, Calculator, Dist, Effect, Enemy, Formatter, Loadout, Mod, Progenitor, State, Upgrade, UpgradeStats
 
 class Build(tuple):
     def __new__(cls, *items): return super().__new__(cls, items)
@@ -30,6 +31,31 @@ def parse_int(value: object, default: int = 0) -> int:
         return int(float(value))
     except (TypeError, ValueError):
         return default
+
+
+def build_calculation_state(*, combo: int | str | None = None, stance_combo: str | None = None, ability_strength: float | None = None) -> State:
+    kwargs: dict[str, object] = {}
+    if combo is not None and combo != INITIAL_COMBO_RUNTIME:
+        kwargs["combo_multiplier"] = int(combo)
+    if stance_combo:
+        kwargs["stance_combo"] = stance_combo
+    if ability_strength is not None:
+        kwargs["ability_strength"] = float(ability_strength)
+    return State(**kwargs)
+
+
+def apply_loadout_runtime(loadout: Loadout, runtime: Mapping[str, object] | None) -> Loadout:
+    if not runtime:
+        return loadout
+    consumable: set[str] = set()
+    for upgrade in loadout.ranked_upgrades:
+        consumable |= {"rank"} | set(upgrade.stats.manual_fields)
+    for perk in loadout.evolutions:
+        consumable |= set(perk.stats.manual_fields)
+    accepted = {key: value for key, value in runtime.items() if key in consumable}
+    if accepted:
+        loadout.set(**accepted)
+    return loadout
 
 
 def weapon_combo_rules(weapon) -> tuple[int, int]:
@@ -451,6 +477,14 @@ def format_stat_value(
     return f"{float(value):,.1%}"
 
 
+def upgrade_description_rows(upgrade: Upgrade, *, fallback_description: str | None = None) -> list[DisplayRow]:
+    text = str(getattr(upgrade, "description", "") or fallback_description or "").strip()
+    if not text:
+        return []
+    parts = [part.strip() for part in re.split(r"(?<=\.)\s+", text) if part.strip()]
+    return [DisplayRow(part, "") for part in parts] if parts else [DisplayRow(text, "")]
+
+
 def upgrade_stat_rows(
     upgrade: Upgrade,
     extra_stats: Mapping[str, object] | None = None,
@@ -530,10 +564,7 @@ def configured_weapon(
     weapon_type_name: str,
     selected_weapon_name: str,
     *,
-    custom_weapon: bool,
-    base_stats: dict,
     upgrades: list[Upgrade],
-    custom_entry: str | None = None,
     selected_mode: str | None = None,
     evolutions: dict[int, int] | None = None,
     combo: int | str | None = None,
@@ -543,28 +574,14 @@ def configured_weapon(
     target: Enemy | None = None,
     progenitor: Progenitor | None = None,
 ):
-    if custom_weapon:
-        if custom_entry is None:
-            entry = weapon_payload(weapon_type_name, base_stats, name=selected_weapon_name)
-        else:
-            entry = parse_database_entry(custom_entry, default_name="Custom Weapon", default_type=weapon_type_name.casefold())
-        weapon = WEAPON_TYPES[weapon_type_name].from_record(entry)
-    else:
-        weapon = database_weapon(selected_weapon_name, weapon_type_name)
-        if weapon is None:
-            raise LookupError(f"Could not load weapon: {selected_weapon_name}")
+    weapon = database_weapon(selected_weapon_name, weapon_type_name)
+    if weapon is None:
+        raise LookupError(f"Could not load weapon: {selected_weapon_name}")
 
     attack = None
     if selected_mode:
         wanted = "_".join(selected_mode.casefold().replace("-", " ").split())
         attack = next((name for name in weapon.attacks if "_".join(name.casefold().replace("-", " ").split()) == wanted), None)
-    state: dict[str, object] = dict(runtime_conditions or {})
-    if combo is not None:
-        state["combo"] = 1 if combo == INITIAL_COMBO_RUNTIME else int(combo)
-    if stance_combo:
-        state["stance_combo"] = stance_combo
-    if ability_strength is not None:
-        state["ability_strength"] = float(ability_strength)
     perks = []
     for tier, choice in (evolutions or {}).items():
         if tier in weapon.perk_choices and choice in weapon.perk_choices[tier]:
@@ -572,9 +589,10 @@ def configured_weapon(
     mods = [upgrade for upgrade in upgrades if isinstance(upgrade, Mod)]
     arcanes = [upgrade for upgrade in upgrades if isinstance(upgrade, Arcane)]
     loadout = Loadout(mods=mods, arcanes=arcanes, evolutions=perks, progenitor=progenitor)
+    apply_loadout_runtime(loadout, runtime_conditions)
     calculator = Calculator(weapon, target, loadout)
     body_part = next(iter(target.bodyparts), None) if target is not None and target.bodyparts else None
-    result = calculator.resolve(attack=attack, body_part=body_part, state=state)
+    result = calculator.resolve(attack=attack, body_part=body_part, state=build_calculation_state(combo=combo, stance_combo=stance_combo, ability_strength=ability_strength))
     return calculator, result
 
 def contribution_items(contribution_lookup) -> list[tuple[object, float]]:
