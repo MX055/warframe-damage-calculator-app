@@ -12,7 +12,7 @@ This project is a Reflex port of the Streamlit application. It keeps the existin
 - Conditional bonus checkboxes shown only for upgrades that need them
 - Rank, stack, compatibility, requirement, and bow fire-rate handling
 - Custom upgrades and external buffs
-- Live DPH/DPS, weakpoint, fire-rate, proc, damage-distribution, summary, and contribution results
+- Live DPH/DPS, weak point, fire-rate, proc, damage-distribution, summary, and contribution results
 
 ## Run locally
 

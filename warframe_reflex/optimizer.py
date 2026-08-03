@@ -4,7 +4,7 @@ import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from warframe_damage_calculator import Arcane, Calculator, Effect, Loadout, Mod, OptimizationProgress, Optimizer, Progenitor, UpgradeStats, arsenal, default_metric
+from warframe_damage_calculator import Arcane, Build, Calculator, Effect, Mod, OptimizationProgress, Optimizer, Progenitor, UpgradeStats, arsenal, balanced_damage_metric
 
 from .constants import DEFAULT_OPTIMIZE_SEARCH, INITIAL_COMBO_RUNTIME, NO_EFFECT, OPTIMIZE_SEARCH_EVALUATION_BUDGETS, RIVEN_ROLL_CONFIGS, RIVEN_STAT_ALIASES, SLOT_CONFIGS, SLOT_POLICY_DISCARD, SLOT_POLICY_KEEP
 from .engine import apply_loadout_runtime, build_calculation_state
@@ -127,11 +127,11 @@ def _load_slot(spec: SlotSpec):
 
 
 def _result_damage_mass(result) -> float:
-    average = result.aggregate.average
-    total_dph = average.direct_dph + average.dot_dph
+    damage = result.aggregate.damage
+    total_dph = damage.direct_dph + damage.dot_dph
     if total_dph <= 0:
         return 1.0
-    weighted = sum((attack.average.direct_dph + attack.average.dot_dph) * (attack.spatial.damage_mass if attack.spatial is not None else 1.0) for attack in result.attacks.values())
+    weighted = sum((attack.damage.direct_dph + attack.damage.dot_dph) * (attack.spatial.damage_mass if attack.spatial.damage_mass is not None else 1.0) for attack in result.attacks.values())
     return weighted / total_dph
 
 
@@ -143,23 +143,23 @@ def _effective_damage_mass(result, aoe_weight: float) -> float:
 def _metric_for(request: OptimizeRequest):
     target = request.maximize_target
     if target == "balanced_total_dps_dph" and request.dph_weight == 0.5 and request.flat_dot_weight == 0.5 and request.aoe_weight == 1.0:
-        return default_metric
+        return balanced_damage_metric
 
     def metric(result):
-        avg = result.aggregate.average
+        damage = result.aggregate.damage
         aliases = {
-            "total_dps": avg.total_dps, "flat_dps": avg.direct_dps, "flat_dotps": avg.dot_dps,
-            "total_dph": avg.total_dph, "flat_dph": avg.direct_dph, "flat_dotph": avg.dot_dph,
+            "total_dps": damage.total_dps, "flat_dps": damage.direct_dps, "flat_dotps": damage.dot_dps,
+            "total_dph": damage.total_dph, "flat_dph": damage.direct_dph, "flat_dotph": damage.dot_dph,
         }
         mass = _effective_damage_mass(result, request.aoe_weight)
         if target == "balanced_total_dps_dph":
-            dps, dph = max(avg.total_dps, 0.0), max(avg.total_dph, 0.0)
+            dps, dph = max(damage.total_dps, 0.0), max(damage.total_dph, 0.0)
             if dps <= 0 or dph <= 0 or mass <= 0:
                 return 0.0
-            # Match default_metric's three-factor geometric mean when dph_weight=0.5.
+            # Match balanced_damage_metric's three-factor geometric mean when dph_weight=0.5.
             return (dps ** (2 * (1 - request.dph_weight)) * dph ** (2 * request.dph_weight) * mass) ** (1 / 3)
-        base = target.replace("total_weakpoint_", "total_").replace("flat_weakpoint_", "flat_").replace("total_resistant_", "total_").replace("flat_resistant_", "flat_")
-        value = float(aliases.get(base, avg.total_dps))
+        base = target.replace("total_weak_point_", "total_").replace("flat_weak_point_", "flat_").replace("total_resistant_", "total_").replace("flat_resistant_", "flat_")
+        value = float(aliases.get(base, damage.total_dps))
         return value * mass if value > 0 and mass > 0 else 0.0
     return metric
 
@@ -232,9 +232,9 @@ def optimize_build(request: OptimizeRequest, progress: ProgressCallback | None =
     arcanes = [item for item in fixed if isinstance(item, Arcane)]
     perks = [weapon.perk_choices[tier][choice] for tier, choice in request.evolutions.items() if tier in weapon.perk_choices and choice in weapon.perk_choices[tier]]
     progenitor = None if request.progenitor_element in {NO_EFFECT, NONE, ""} else Progenitor(request.progenitor_element, request.progenitor_value)
-    loadout = Loadout(mods=mods, arcanes=arcanes, evolutions=perks, progenitor=progenitor)
-    apply_loadout_runtime(loadout, request.evolution_runtime)
-    calculator = Calculator(weapon, enemy, loadout)
+    build = Build(mods=mods, arcanes=arcanes, evolutions=perks, progenitor=progenitor)
+    apply_loadout_runtime(build, request.evolution_runtime)
+    calculator = Calculator(weapon, enemy, build)
     budget = OPTIMIZE_SEARCH_EVALUATION_BUDGETS.get(request.search_quality, OPTIMIZE_SEARCH_EVALUATION_BUDGETS[DEFAULT_OPTIMIZE_SEARCH])
     upgrade_blacklist = set(request.excluded_upgrades) if request.excluded_upgrades else None
     riven_blacklist = set(request.excluded_riven_stats) if request.excluded_riven_stats else None
@@ -273,10 +273,10 @@ def optimize_build(request: OptimizeRequest, progress: ProgressCallback | None =
         if item is not None:
             place(item, spec.index)
             policies[spec.index] = SLOT_POLICY_KEEP
-    for item in optimization.loadout.ranked_upgrades:
+    for item in optimization.build.ranked_upgrades:
         if any(item.name == fixed_item.name and type(item) is type(fixed_item) for fixed_item in fixed): continue
         place(item)
 
-    perk_selection = _perk_map(weapon, optimization.loadout.evolutions)
-    progenitor_element = optimization.loadout.progenitor.element.title() if optimization.loadout.progenitor else NO_EFFECT
+    perk_selection = _perk_map(weapon, optimization.build.evolutions)
+    progenitor_element = optimization.build.progenitor.element.title() if optimization.build.progenitor else NO_EFFECT
     return OptimizeResult(names, ranks, stacks, conditions, policies, rolls, riven_fields, optimization.score, optimization.evaluations, f"Optimization completed in {optimization.elapsed:.1f}s.", perk_selection, request.find_optimal_evolutions, progenitor_element, request.find_optimal_progenitor, request.search_quality, "budget exhausted" if optimization.summary and optimization.summary.get("budget_exhausted") else "converged", optimization.elapsed)

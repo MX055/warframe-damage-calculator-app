@@ -1,6 +1,6 @@
 from types import SimpleNamespace
 
-from warframe_damage_calculator import default_metric
+from warframe_damage_calculator import balanced_damage_metric
 
 import warframe_reflex.optimizer as opt
 
@@ -29,15 +29,15 @@ def _balanced_request(**overrides):
     return request
 
 
-def test_default_aoe_weight_uses_library_default_metric():
-    assert opt._metric_for(_balanced_request()) is default_metric
+def test_default_aoe_weight_uses_library_balanced_damage_metric():
+    assert opt._metric_for(_balanced_request()) is balanced_damage_metric
 
 
 def test_aoe_weight_scales_damage_mass_in_the_balanced_metric():
     spatial = SimpleNamespace(damage_mass=8.0)
-    attack = SimpleNamespace(average=SimpleNamespace(direct_dph=100.0, dot_dph=0.0), spatial=spatial)
+    attack = SimpleNamespace(damage=SimpleNamespace(direct_dph=100.0, dot_dph=0.0), spatial=spatial)
     result = SimpleNamespace(
-        aggregate=SimpleNamespace(average=SimpleNamespace(total_dps=100.0, total_dph=100.0, direct_dph=100.0, dot_dph=0.0, direct_dps=100.0, dot_dps=0.0)),
+        aggregate=SimpleNamespace(damage=SimpleNamespace(total_dps=100.0, total_dph=100.0, direct_dph=100.0, dot_dph=0.0, direct_dps=100.0, dot_dps=0.0)),
         attacks={"grenade_impact": attack},
     )
 

@@ -14,11 +14,11 @@ def test_current_library_contributions_use_library_removal_scores():
     assert {name for name, _ in contributions} == {"Serration", "Vital Sense"}
     assert sum(value for _, value in contributions) == pytest.approx(1.0)
     _calculator, result = resolved
-    library = Calculator(result.weapon, result.target, result.loadout).contributions(attack=result.selected_attack, metric="total_dps", body_part=result.selected_bodypart, state=result.state)
+    library = Calculator(result.weapon, result.target, result.build).contributions(attack=result.selected_attack, metric="total_dps", body_part=result.selected_body_part, state=result.state)
     assert dict(contributions) == library.contribution
     lookup, summary, rows = library_contribution_bundle(resolved)
     assert dict(lookup) == library.contribution
-    assert summary == Formatter(result).contributions(metric="total_dps", body_part=result.selected_bodypart)
+    assert summary == Formatter(result).build_summary(metric="total_dps", body_part=result.selected_body_part)
     assert summary == result_contributions_summary(resolved)
     assert "Serration" in summary
     assert "Vital Sense" in summary

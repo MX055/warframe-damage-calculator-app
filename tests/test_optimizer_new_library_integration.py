@@ -1,6 +1,6 @@
 from types import SimpleNamespace
 
-from warframe_damage_calculator import Calculator, Effect, Loadout, Mod, Optimizer as LibraryOptimizer, UpgradeStats, arsenal, default_metric
+from warframe_damage_calculator import Build, Calculator, Effect, Mod, Optimizer as LibraryOptimizer, UpgradeStats, arsenal, balanced_damage_metric
 
 import warframe_reflex.optimizer as app_optimizer
 from warframe_reflex.constants import SLOT_POLICY_DISCARD, SLOT_POLICY_KEEP
@@ -15,11 +15,11 @@ def test_only_kept_components_are_passed_to_library_optimizer(monkeypatch):
 
     class FakeOptimizer:
         def __init__(self, calculator):
-            captured["loadout"] = calculator.loadout
+            captured["build"] = calculator.build
 
         def resolve(self, metric, **kwargs):
             captured["kwargs"] = kwargs
-            return SimpleNamespace(loadout=captured["loadout"], score=1.0, evaluations=1, elapsed=0.01, summary={"budget_exhausted": False})
+            return SimpleNamespace(build=captured["build"], score=1.0, evaluations=1, elapsed=0.01, summary={"budget_exhausted": False})
 
     monkeypatch.setattr(app_optimizer, "Optimizer", FakeOptimizer)
     request = app_optimizer.OptimizeRequest(
@@ -41,9 +41,9 @@ def test_only_kept_components_are_passed_to_library_optimizer(monkeypatch):
 
     app_optimizer.optimize_build(request, progress=None)
 
-    assert [mod.name for mod in captured["loadout"].mods] == ["Serration"]
+    assert [mod.name for mod in captured["build"].mods] == ["Serration"]
     assert captured["kwargs"]["body_part"] == "head"
-    assert app_optimizer._metric_for(request) is default_metric
+    assert app_optimizer._metric_for(request) is balanced_damage_metric
 
 
 def test_app_uses_library_optimizer_class():
@@ -59,7 +59,7 @@ def test_optimized_runtime_stacks_are_preserved(monkeypatch):
             pass
 
         def resolve(self, metric, **kwargs):
-            return SimpleNamespace(loadout=Loadout(mods=[galvanized], arcanes=[compression]), score=1.0, evaluations=12, elapsed=0.01, summary={"budget_exhausted": False})
+            return SimpleNamespace(build=Build(mods=[galvanized], arcanes=[compression]), score=1.0, evaluations=12, elapsed=0.01, summary={"budget_exhausted": False})
 
     monkeypatch.setattr(app_optimizer, "Optimizer", FakeOptimizer)
     request = app_optimizer.OptimizeRequest(

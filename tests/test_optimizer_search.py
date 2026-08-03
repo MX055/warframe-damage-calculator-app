@@ -175,9 +175,9 @@ def test_max_effort_has_a_20k_evaluation_budget():
 
 
 def test_dps_dph_weight_controls_the_balanced_objective():
-    final = SimpleNamespace(total_dps=100.0, total_dph=10.0, total_weakpoint_dps=0.0, total_weakpoint_dph=0.0, flat_dotps=0.0, flat_dotph=0.0, flat_weakpoint_dotps=0.0, flat_weakpoint_dotph=0.0)
-    assert opt.score_maximize_target(final, "balanced_total_dps_dph", weakpoint_weight=0, flat_dot_weight=0, dph_weight=0) == 100
-    assert opt.score_maximize_target(final, "balanced_total_dps_dph", weakpoint_weight=0, flat_dot_weight=0, dph_weight=1) == 10
+    final = SimpleNamespace(total_dps=100.0, total_dph=10.0, total_weak_point_dps=0.0, total_weak_point_dph=0.0, flat_dotps=0.0, flat_dotph=0.0, flat_weak_point_dotps=0.0, flat_weak_point_dotph=0.0)
+    assert opt.score_maximize_target(final, "balanced_total_dps_dph", weak_point_weight=0, flat_dot_weight=0, dph_weight=0) == 100
+    assert opt.score_maximize_target(final, "balanced_total_dps_dph", weak_point_weight=0, flat_dot_weight=0, dph_weight=1) == 10
 
 
 def test_optimizer_can_find_a_progenitor_element_without_changing_its_value(fake_optimizer, monkeypatch):

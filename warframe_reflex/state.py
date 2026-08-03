@@ -90,11 +90,12 @@ from .engine import (
     progenitor_upgrade,
     ranged_misc_metrics,
     result_summary,
+    result_status_summary,
     result_summary_table_rows,
     resistant_metrics,
     upgrade_field_input_config,
     upgrade_description_rows,
-    weakpoint_metrics,
+    weak_point_metrics,
 )
 from .models import (
     ClearBuffRow,
@@ -168,7 +169,7 @@ BASE_NUMBER_BOUNDS: dict[str, tuple[float, float, bool]] = {
     "base_fire_rate": (0.05, 100.0, False),
     "base_reload_speed": (0.0, 20.0, False),
     "base_magazine_capacity": (1.0, 10000.0, True),
-    "base_weakpoint_damage": (1.0, 20.0, False),
+    "base_weak_point_damage": (1.0, 20.0, False),
     "base_attack_speed": (0.0, 20.0, False),
     "base_recharge_rate": (0.0, 1000.0, False),
     "base_charge_time": (0.0, 20.0, False),
@@ -222,10 +223,10 @@ class CalculatorState(rx.State):
     enemy_steel_path: bool = False
     enemy_empowered: bool = False
     enemy_identity_rows: list[DisplayRow] = rx.field(default_factory=list)
-    enemy_bodypart_rows: list[DisplayRow] = rx.field(default_factory=list)
+    enemy_body_part_rows: list[DisplayRow] = rx.field(default_factory=list)
     enemy_modifier_rows: list[DisplayRow] = rx.field(default_factory=list)
     enemy_result_metrics: list[MetricRow] = rx.field(default_factory=list)
-    enemy_has_weakpoint: bool = False
+    enemy_has_weak_point: bool = False
     enemy_has_resistant: bool = False
     enemy_error: str = ""
     attack_mode_options: list[str] = rx.field(default_factory=list)
@@ -268,7 +269,7 @@ class CalculatorState(rx.State):
     base_fire_rate: float = 0.05
     base_reload_speed: float = 0.0
     base_magazine_capacity: int = 1
-    base_weakpoint_damage: float = 3.0
+    base_weak_point_damage: float = 3.0
     base_attack_speed: float = 1.0
     base_recharge_rate: float = 0.0
     base_charge_time: float = 0.0
@@ -369,7 +370,7 @@ class CalculatorState(rx.State):
     external_pending_field: str = ""
 
     main_result_metrics: list[MetricRow] = rx.field(default_factory=list)
-    weakpoint_result_metrics: list[MetricRow] = rx.field(default_factory=list)
+    weak_point_result_metrics: list[MetricRow] = rx.field(default_factory=list)
     resistant_result_metrics: list[MetricRow] = rx.field(default_factory=list)
     ranged_result_metrics: list[MetricRow] = rx.field(default_factory=list)
     misc_result_metrics: list[MetricRow] = rx.field(default_factory=list)
@@ -378,6 +379,7 @@ class CalculatorState(rx.State):
     contribution_result_rows: list[ContributionRow] = rx.field(default_factory=list)
     summary_result_rows: list[SummaryTableRow] = rx.field(default_factory=list)
     result_summary: str = ""
+    result_status_summary: str = ""
     result_contribution_summary: str = ""
     contribution_revision: int = 0
     contributions_pending: bool = False
@@ -2103,10 +2105,10 @@ class CalculatorState(rx.State):
     def _refresh_enemy_preview(self, enemy) -> None:
         if self.no_enemy:
             self.enemy_identity_rows = []
-            self.enemy_bodypart_rows = []
+            self.enemy_body_part_rows = []
             self.enemy_modifier_rows = []
             self.enemy_result_metrics = []
-            self.enemy_has_weakpoint = False
+            self.enemy_has_weak_point = False
             self.enemy_has_resistant = False
             self.optimize_body_part_options = []
             self.optimize_body_part = ""
@@ -2115,10 +2117,10 @@ class CalculatorState(rx.State):
             return
         data = enemy
         effective = enemy.effective
-        part_types = {str(part.type).casefold() for part in data.bodyparts.values()}
-        self.enemy_has_weakpoint = any("weakpoint" in part_type for part_type in part_types)
+        part_types = {str(part.type).casefold() for part in data.body_parts.values()}
+        self.enemy_has_weak_point = any("weak_point" in part_type for part_type in part_types)
         self.enemy_has_resistant = any("resistant" in part_type for part_type in part_types)
-        self.optimize_body_part_options = list(data.bodyparts)
+        self.optimize_body_part_options = list(data.body_parts)
         if self.optimize_body_part not in self.optimize_body_part_options:
             self.optimize_body_part = self.optimize_body_part_options[0] if self.optimize_body_part_options else ""
         self._refresh_optimize_maximize_options()
@@ -2128,9 +2130,9 @@ class CalculatorState(rx.State):
             DisplayRow("Base Level", f"{float(data.base_level):g}"),
             DisplayRow("Current Level", str(self.enemy_level)),
         ]
-        self.enemy_bodypart_rows = [
-            DisplayRow(f"{str(name).replace('_', ' ').title()} ({str(part.type).title()})", f"{float(part.multiplier):g}x")
-            for name, part in data.bodyparts.items()
+        self.enemy_body_part_rows = [
+            DisplayRow(f"{str(name).replace('_', ' ').title()} ({str(part.type).replace('_', ' ').title()})", f"{float(part.multiplier):g}x")
+            for name, part in data.body_parts.items()
         ]
         self.enemy_modifier_rows = [
             DisplayRow(field_label(str(name)), f"{float(value):g}x")
@@ -2172,7 +2174,7 @@ class CalculatorState(rx.State):
             "fire_rate": self.base_fire_rate,
             "reload_speed": self.base_reload_speed,
             "magazine_capacity": self.base_magazine_capacity,
-            "weakpoint_damage": self.base_weakpoint_damage,
+            "weak_point_damage": self.base_weak_point_damage,
             "recharge_rate": self.base_recharge_rate if self.is_battery else 0.0,
             "charge_time": self.base_charge_time if self.is_charge_weapon else 0.0,
             "burst_count": self.base_burst_count if self.is_burst_weapon else 1,
@@ -2273,7 +2275,7 @@ class CalculatorState(rx.State):
     def _clear_calculation_results(self):
         self.slot_contributions = ["—" for _ in SLOT_CONFIGS]
         self.main_result_metrics = []
-        self.weakpoint_result_metrics = []
+        self.weak_point_result_metrics = []
         self.resistant_result_metrics = []
         self.ranged_result_metrics = []
         self.misc_result_metrics = []
@@ -2282,6 +2284,7 @@ class CalculatorState(rx.State):
         self.contribution_result_rows = []
         self.summary_result_rows = []
         self.result_summary = ""
+        self.result_status_summary = ""
         self.result_contribution_summary = ""
         self.contribution_revision += 1
         self.contributions_pending = False
@@ -2313,10 +2316,10 @@ class CalculatorState(rx.State):
         target = self._target_enemy()
         self._refresh_enemy_preview(target)
         if target is not None and self.optimize_body_part:
-            if self.optimize_body_part not in target.bodyparts:
+            if self.optimize_body_part not in target.body_parts:
                 raise ValueError(f"Unknown body part: {self.optimize_body_part}")
             target = target.copy()
-            target.bodyparts = {self.optimize_body_part: target.bodyparts[self.optimize_body_part]}
+            target.body_parts = {self.optimize_body_part: target.body_parts[self.optimize_body_part]}
         return target
 
     def _apply_contribution_summary_sync(self):
@@ -2391,10 +2394,10 @@ class CalculatorState(rx.State):
                 target = self._target_for_calculation()
             except Exception as exc:
                 self.enemy_identity_rows = []
-                self.enemy_bodypart_rows = []
+                self.enemy_body_part_rows = []
                 self.enemy_modifier_rows = []
                 self.enemy_result_metrics = []
-                self.enemy_has_weakpoint = False
+                self.enemy_has_weak_point = False
                 self.enemy_has_resistant = False
                 self._refresh_optimize_maximize_options()
                 self.enemy_error = f"{type(exc).__name__}: {exc}"
@@ -2424,13 +2427,14 @@ class CalculatorState(rx.State):
             weapon, _upgrades, slot_upgrades = self._build_resolved_weapon(target)
             self.slot_stat_rows = [self._slot_preview_rows(index, upgrade) for index, upgrade in enumerate(slot_upgrades)]
             self.main_result_metrics = main_metrics(weapon)
-            self.weakpoint_result_metrics = []
+            self.weak_point_result_metrics = []
             self.resistant_result_metrics = []
             self.misc_result_metrics = [] if self.selected_weapon_type == "Melee" else ranged_misc_metrics(weapon)
-            self.result_metrics = self.main_result_metrics + self.weakpoint_result_metrics + self.resistant_result_metrics + self.misc_result_metrics
+            self.result_metrics = self.main_result_metrics + self.weak_point_result_metrics + self.resistant_result_metrics + self.misc_result_metrics
             self.ranged_result_metrics = self.result_metrics
             self.damage_result_rows = effective_damage_rows(weapon, melee=self.selected_weapon_type == "Melee")
             self.result_summary = result_summary(weapon)
+            self.result_status_summary = result_status_summary(weapon)
             self.summary_result_rows = result_summary_table_rows(weapon)
             self.contribution_revision += 1
             self.contributions_pending = True

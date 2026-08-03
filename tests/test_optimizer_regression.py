@@ -46,7 +46,7 @@ def test_vectis_riven_incumbent_score_matches_a_clean_result():
         weapon_type="Primary", weapon_category="Sniper", weapon_name="Vectis Prime", custom_weapon=False, custom_weapon_entry="", attack_mode="Normal Attack",
         evolutions={1: 1, 2: 1, 3: 1, 4: 2}, combo_count=1, evolution_runtime={"channeled_ability": True}, progenitor_element="None", progenitor_value=0.0,
         external_fields={}, slots=slots, find_optimal_riven=True, find_optimal_evolutions=True, enemy_name="Exo Gokstad Officer", enemy_level=235,
-        enemy_steel_path=True, maximize_target="total_weakpoint_dps", excluded_upgrades={name for name in pools if optimizer_excludes_upgrade_by_default(name)},
+        enemy_steel_path=True, maximize_target="total_weak_point_dps", excluded_upgrades={name for name in pools if optimizer_excludes_upgrade_by_default(name)},
         search_quality=OPTIMIZE_SEARCH_FAST, riven_disposition=1.0, riven_base_stats=dict(raw_riven_stats_database()["rifle"]),
     )
 
@@ -62,4 +62,4 @@ def test_vectis_riven_incumbent_score_matches_a_clean_result():
     target = configured_enemy(request.enemy_name, level=request.enemy_level, steel_path=request.enemy_steel_path, empowered=False)
     weapon = configured_weapon("Primary", "Vectis Prime", custom_weapon=False, base_stats={}, upgrades=upgrades, selected_mode=request.attack_mode, evolutions=result.evolutions, runtime_conditions=request.evolution_runtime, target=target)
 
-    assert result.total_dps == pytest.approx(weapon.results.main.final.total_weakpoint_dps)
+    assert result.total_dps == pytest.approx(weapon.results.main.final.total_weak_point_dps)

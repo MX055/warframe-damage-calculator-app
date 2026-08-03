@@ -5,11 +5,8 @@ import re
 from collections.abc import Mapping
 from typing import Iterable
 
-from warframe_damage_calculator import Arcane, Calculator, Dist, Effect, Enemy, Formatter, Loadout, Mod, Progenitor, State, Upgrade, UpgradeStats
+from warframe_damage_calculator import Arcane, Build, Calculator, Dist, Effect, Enemy, Formatter, Mod, Progenitor, State, Upgrade, UpgradeStats
 from warframe_damage_calculator.domain.attacks import match_related_keys
-
-class Build(tuple):
-    def __new__(cls, *items): return super().__new__(cls, items)
 
 from .constants import INITIAL_COMBO_RUNTIME, UPGRADE_BOOL_FIELDS, WEAPON_TYPES
 from .data import database_enemy, database_weapon
@@ -55,18 +52,18 @@ def build_calculation_state(*, combo: int | str | None = None, stance_combo: str
     return State(**kwargs)
 
 
-def apply_loadout_runtime(loadout: Loadout, runtime: Mapping[str, object] | None) -> Loadout:
+def apply_loadout_runtime(build: Build, runtime: Mapping[str, object] | None) -> Build:
     if not runtime:
-        return loadout
+        return build
     consumable: set[str] = set()
-    for upgrade in loadout.ranked_upgrades:
+    for upgrade in build.ranked_upgrades:
         consumable |= {"rank"} | set(upgrade.stats.manual_fields)
-    for perk in loadout.evolutions:
+    for perk in build.evolutions:
         consumable |= set(perk.stats.manual_fields)
     accepted = {key: value for key, value in runtime.items() if key in consumable}
     if accepted:
-        loadout.set(**accepted)
-    return loadout
+        build.set(**accepted)
+    return build
 
 
 def weapon_combo_rules(weapon) -> tuple[int, int]:
@@ -155,7 +152,7 @@ def build_upgrade(name: str, values: dict[str, float | int]) -> Upgrade:
         "multiplicative_crit_chance": ("crit_chance", "base"),
         "flat_crit_damage": ("crit_damage", "flat"),
         "multiplicative_fire_rate": ("fire_rate", "base"),
-        "multiplicative_weakpoint_crit_chance": ("weakpoint_crit_chance", "base"),
+        "multiplicative_weak_point_crit_chance": ("weak_point_crit_chance", "base"),
     }
     stats: dict[str, object] = {}
 
@@ -572,10 +569,10 @@ def configured_weapon(
             perks.append(weapon.perk_choices[tier][choice])
     mods = [upgrade for upgrade in upgrades if isinstance(upgrade, Mod)]
     arcanes = [upgrade for upgrade in upgrades if isinstance(upgrade, Arcane)]
-    loadout = Loadout(mods=mods, arcanes=arcanes, evolutions=perks, progenitor=progenitor)
-    apply_loadout_runtime(loadout, runtime_conditions)
-    calculator = Calculator(weapon, target, loadout)
-    body_part = next(iter(target.bodyparts), None) if target is not None and target.bodyparts else None
+    build = Build(mods=mods, arcanes=arcanes, evolutions=perks, progenitor=progenitor)
+    apply_loadout_runtime(build, runtime_conditions)
+    calculator = Calculator(weapon, target, build)
+    body_part = next(iter(target.body_parts), None) if target is not None and target.body_parts else None
     result = calculator.resolve(attack=attack, body_part=body_part, state=build_calculation_state(combo=combo, stance_combo=stance_combo, ability_strength=ability_strength))
     return calculator, result
 
@@ -626,27 +623,27 @@ def compute_contribution_proportions(
     base_stats: dict,
     upgrades: list[Upgrade],
     target: Enemy | None = None,
-    target_metric: str = "total_weakpoint_dps",
+    target_metric: str = "total_weak_point_dps",
 ) -> list[tuple[Upgrade, float]]:
     raise RuntimeError("compute_contribution_proportions is obsolete; use contribution_lookup_for_weapon with a library Calculator.resolve() result")
 
 
 def _normalize_contribution_metric(target_metric: str) -> str:
-    return target_metric.replace("total_weakpoint_", "total_").replace("flat_weakpoint_", "direct_").replace("total_resistant_", "total_").replace("flat_resistant_", "direct_").replace("flat_", "direct_")
+    return target_metric.replace("total_weak_point_", "total_").replace("flat_weak_point_", "direct_").replace("total_resistant_", "total_").replace("flat_resistant_", "direct_").replace("flat_", "direct_")
 
 
 def library_contribution_bundle(resolved, target_metric: str = "total_dps"):
-    """Lookup rows from Calculator.contributions(); summary text from Formatter.contributions()."""
+    """Lookup rows from Calculator.contributions(); summary text from Formatter.build_summary()."""
     if not (isinstance(resolved, tuple) and len(resolved) == 2):
         return [], "", []
     _calculator, result = resolved
-    if not result.loadout.upgrades and result.loadout.progenitor is None:
+    if not result.build.upgrades and result.build.progenitor is None:
         return [], "", []
     metric = _normalize_contribution_metric(target_metric)
-    contribution_result = Calculator(result.weapon, result.target, result.loadout).contributions(attack=result.selected_attack, metric=metric, body_part=result.selected_bodypart, state=result.state)
+    contribution_result = Calculator(result.weapon, result.target, result.build).contributions(attack=result.selected_attack, metric=metric, body_part=result.selected_body_part, state=result.state)
     ordered = sorted(contribution_result.contribution.items(), key=lambda item: item[1], reverse=True)
     formatter = Formatter(result)
-    table = formatter.contribution_table(metric=metric, body_part=result.selected_bodypart, contributions=contribution_result)
+    table = formatter.build_summary_table(metric=metric, body_part=result.selected_body_part, contributions=contribution_result)
     text = "" if table is None else formatter._table(table[1], table[2], title=table[0])
     rows = [] if table is None else [ContributionRow(*row) for row in table[2]]
     return ordered, text, rows
@@ -698,18 +695,18 @@ def format_upgrade_contributions(contribution_lookup) -> str:
 
 def main_metrics(resolved) -> list[MetricRow]:
     _calculator, result = resolved
-    average = result.aggregate.average
+    damage = result.aggregate.damage
     return [
-        MetricRow("Direct DPH", f"{average.direct_dph:,.2f}"),
-        MetricRow("DoT DPH", f"{average.dot_dph:,.2f}"),
-        MetricRow("Total DPH", f"{average.total_dph:,.2f}"),
-        MetricRow("Direct DPS", f"{average.direct_dps:,.2f}"),
-        MetricRow("DoT DPS", f"{average.dot_dps:,.2f}"),
-        MetricRow("Total DPS", f"{average.total_dps:,.2f}"),
+        MetricRow("Direct DPH", f"{damage.direct_dph:,.2f}"),
+        MetricRow("DoT DPH", f"{damage.dot_dph:,.2f}"),
+        MetricRow("Total DPH", f"{damage.total_dph:,.2f}"),
+        MetricRow("Direct DPS", f"{damage.direct_dps:,.2f}"),
+        MetricRow("DoT DPS", f"{damage.dot_dps:,.2f}"),
+        MetricRow("Total DPS", f"{damage.total_dps:,.2f}"),
     ]
 
 
-def weakpoint_metrics(resolved) -> list[MetricRow]:
+def weak_point_metrics(resolved) -> list[MetricRow]:
     return []
 
 
@@ -719,8 +716,8 @@ def resistant_metrics(resolved) -> list[MetricRow]:
 
 def ranged_misc_metrics(resolved) -> list[MetricRow]:
     _calculator, result = resolved
-    selected = result.attacks[result.selected_attack].average
-    return [MetricRow("Average Fire Rate", f"{selected.fire_rate:,.2f}"), MetricRow("Procs / Shot", f"{sum(selected.status_chance for _ in [0]):,.2f}")]
+    selected = result.attacks[result.selected_attack]
+    return [MetricRow("Average Fire Rate", f"{selected.timing.fire_rate:,.2f}"), MetricRow("Procs / Shot", f"{selected.status.status_chance:,.2f}")]
 
 
 def _status_summary_cells(attack, damage_type: str) -> tuple[str, str, str, str]:
@@ -776,11 +773,15 @@ def effective_damage_rows(resolved, *, melee: bool = False) -> list[DamageResult
 
 
 def result_summary(resolved) -> str:
-    return Formatter(resolved[1]).summary()
+    return Formatter(resolved[1]).stat_summary()
+
+
+def result_status_summary(resolved) -> str:
+    return Formatter(resolved[1]).status_summary()
 
 
 def result_summary_table_rows(resolved) -> list[SummaryTableRow]:
-    _title, _headers, rows = Formatter(resolved[1]).summary_table()
+    _title, _headers, rows = Formatter(resolved[1]).stat_summary_table()
     output: list[SummaryTableRow] = []
     section_start = False
     for index, row in enumerate(rows):
@@ -793,4 +794,4 @@ def result_summary_table_rows(resolved) -> list[SummaryTableRow]:
 
 
 def result_contributions_summary(resolved) -> str:
-    return Formatter(resolved[1]).contributions()
+    return Formatter(resolved[1]).build_summary()

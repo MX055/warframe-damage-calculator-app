@@ -1331,7 +1331,7 @@ def optimizer_run_controls() -> rx.Component:
             CalculatorState.optimize_search_quality == "Max",
             rx.text("Warning: Max will take longer to resolve compared to High and produce nearly identical results.", class_name="optimizer-warning"),
         ),
-        # rx.text("Balances DPS against DPH, normal against weakpoint damage when available, and direct damage against flat DOT.", class_name="optimizer-help"),
+        # rx.text("Balances DPS against DPH, normal against weak point damage when available, and direct damage against flat DOT.", class_name="optimizer-help"),
         rx.cond(
             CalculatorState.riven_optimize_available,
             rx.vstack(
@@ -1699,14 +1699,19 @@ def result_tabs() -> rx.Component:
         ),
         rx.tabs.content(
             rx.vstack(
-                rx.text("Weapon Summary", class_name="card-title"),
+                rx.text("Status", class_name="card-title"),
                 rx.el.pre(
-                    CalculatorState.result_summary,
+                    CalculatorState.result_status_summary,
                     class_name="plain-text-summary",
                 ),
                 rx.text("Upgrade Contributions", class_name="card-title"),
                 rx.el.pre(
                     CalculatorState.result_contribution_summary,
+                    class_name="plain-text-summary",
+                ),
+                rx.text("Weapon Summary", class_name="card-title"),
+                rx.el.pre(
+                    CalculatorState.result_summary,
                     class_name="plain-text-summary",
                 ),
                 width="100%",
