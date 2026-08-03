@@ -663,7 +663,7 @@ def _normalize_contribution_metric(target_metric: str) -> str:
 
 
 def library_contribution_bundle(resolved, target_metric: str = "total_dps"):
-    """One library Calculator.contributions() pass → lookup rows + Formatter table text."""
+    """Lookup rows from Calculator.contributions(); summary text from Formatter.contributions()."""
     if not (isinstance(resolved, tuple) and len(resolved) == 2):
         return [], ""
     _calculator, result = resolved
@@ -672,7 +672,7 @@ def library_contribution_bundle(resolved, target_metric: str = "total_dps"):
     metric = _normalize_contribution_metric(target_metric)
     contribution_result = Calculator(result.weapon, result.target, result.loadout).contributions(attack=result.selected_attack, metric=metric, body_part=result.selected_bodypart, state=result.state)
     ordered = sorted(contribution_result.contribution.items(), key=lambda item: item[1], reverse=True)
-    text = Formatter(result).format_contributions(contribution_result, metric=metric, body_part=result.selected_bodypart)
+    text = Formatter(result).contributions(metric=metric, body_part=result.selected_bodypart)
     return ordered, text
 
 
@@ -765,5 +765,4 @@ def result_summary(resolved) -> str:
 
 
 def result_contributions_summary(resolved) -> str:
-    _lookup, text = library_contribution_bundle(resolved)
-    return text
+    return Formatter(resolved[1]).contributions()

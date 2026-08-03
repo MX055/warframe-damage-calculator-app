@@ -18,7 +18,7 @@ def test_current_library_contributions_use_library_removal_scores():
     assert dict(contributions) == library.contribution
     lookup, summary = library_contribution_bundle(resolved)
     assert dict(lookup) == library.contribution
-    assert summary == Formatter(result).format_contributions(library, metric="total_dps", body_part=result.selected_bodypart)
+    assert summary == Formatter(result).contributions(metric="total_dps", body_part=result.selected_bodypart)
     assert summary == result_contributions_summary(resolved)
     assert "Serration" in summary
     assert "Vital Sense" in summary
